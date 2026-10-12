@@ -6,14 +6,14 @@ def runNumber = (System.getenv("GITHUB_RUN_NUMBER") ?: "1") as int
 
 android {
     namespace 'com.kjt.jiannote'
-    compileSdk 34
+    compileSdk 36
 
     defaultConfig {
         applicationId 'com.kjt.jiannote'
         minSdk 29
-        targetSdk 34
+        targetSdk 36
         versionCode runNumber
-        versionName "1.0.${runNumber}"
+        versionName "1.1.${runNumber}"
     }
 
     signingConfigs {
@@ -40,8 +40,16 @@ android {
         targetCompatibility JavaVersion.VERSION_17
     }
 
+    bundle {
+        language { enableSplit = false }
+    }
+
     lint {
         abortOnError false
         checkReleaseBuilds false
     }
+}
+
+dependencies {
+    implementation 'com.android.billingclient:billing:8.0.0'
 }

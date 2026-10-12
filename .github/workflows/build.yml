@@ -21,13 +21,13 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.9'
+          gradle-version: '8.13'
 
       - name: Build release APK
         shell: bash
         run: |
           set -o pipefail
-          gradle assembleRelease --no-daemon 2>&1 | tee build.log
+          gradle assembleRelease bundleRelease --no-daemon 2>&1 | tee build.log
 
       - name: Report build errors
         if: failure()
@@ -37,18 +37,24 @@ jobs:
           echo "::error title=Build failed::$msg"
 
       - name: Rename APK
-        run: cp app/build/outputs/apk/release/app-release.apk JianNote-v1.0.${{ github.run_number }}.apk
+        run: |
+          cp app/build/outputs/apk/release/app-release.apk JianNote-v1.1.${{ github.run_number }}.apk
+          cp app/build/outputs/bundle/release/app-release.aab JianNote-v1.1.${{ github.run_number }}-playstore.aab
 
       - uses: actions/upload-artifact@v4
         with:
           name: JianNote-apk
-          path: JianNote-*.apk
+          path: |
+            JianNote-*.apk
+            JianNote-*.aab
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
-          name: JianNote v1.0.${{ github.run_number }}
-          body: "갤럭시탭에서 APK를 다운로드해 설치하세요. (같은 서명이라 기존 앱 위에 업데이트 설치됩니다)"
-          files: JianNote-*.apk
+          name: JianNote v1.1.${{ github.run_number }}
+          body: "APK = 태블릿에 직접 설치용 / AAB = 구글 플레이 콘솔 업로드용"
+          files: |
+            JianNote-*.apk
+            JianNote-*.aab
           make_latest: true
