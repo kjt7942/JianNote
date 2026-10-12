@@ -6,6 +6,7 @@ public class Page {
     /** 0이면 무한 캔버스 */
     public float w, h;
     public int template;
+    public boolean bookmarked;
     public ArrayList<Layer> layers = new ArrayList<>();
 
     public Page(float w, float h, int template) {
@@ -26,6 +27,7 @@ public class Page {
 
     public Page copy() {
         Page p = new Page(w, h, template);
+        p.bookmarked = bookmarked;
         for (Layer l : layers) p.layers.add(l.copy());
         return p;
     }

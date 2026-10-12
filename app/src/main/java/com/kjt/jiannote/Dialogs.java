@@ -41,6 +41,7 @@ public class Dialogs {
         boolean landscape;
         boolean chosen;
         boolean locked;
+        String label;
         private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
 
         public TemplateChip(Context c, int template, boolean locked) {
@@ -75,7 +76,7 @@ public class Dialogs {
             p.setTextSize(11 * d);
             p.setTextAlign(Paint.Align.CENTER);
             p.setTypeface(chosen ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
-            c.drawText((locked ? "👑 " : "") + Paper.NAMES[template], getWidth() / 2f, getHeight() - 6 * d, p);
+            c.drawText((locked ? "👑 " : "") + (label != null ? label : Paper.NAMES[template]), getWidth() / 2f, getHeight() - 6 * d, p);
         }
     }
 
@@ -217,6 +218,128 @@ public class Dialogs {
                 .show();
     }
 
+
+    public interface TemplateCb {
+        void on(int template, boolean allPages);
+    }
+
+    /** 속지를 미리보기 이미지로 고르는 창 */
+    public static void templatePicker(Activity a, Premium premium, int paperColor, boolean landscape, int current,
+                                      boolean showApplyAll, TemplateCb cb) {
+        LinearLayout root = Ui.col(a);
+        int pad = Ui.dp(a, 16);
+        root.setPadding(pad, Ui.dp(a, 8), pad, 0);
+        android.widget.GridLayout grid = new android.widget.GridLayout(a);
+        grid.setColumnCount(4);
+        root.addView(grid);
+        final int[] chosen = {current};
+        final ArrayList<TemplateChip> chips = new ArrayList<>();
+        for (int t = 0; t < Paper.COUNT; t++) {
+            boolean locked = Paper.isPremium(t) && !premium.isPremium();
+            TemplateChip chip = new TemplateChip(a, t, locked);
+            chip.paper = paperColor;
+            chip.landscape = landscape;
+            chip.chosen = t == current;
+            chips.add(chip);
+            final int tt = t;
+            chip.setOnClickListener(v -> {
+                if (Paper.isPremium(tt) && !premium.isPremium()) {
+                    limit(a, premium, "'" + Paper.NAMES[tt] + "' 속지는 프리미엄 전용입니다.", null);
+                    return;
+                }
+                chosen[0] = tt;
+                for (TemplateChip ch : chips) {
+                    ch.chosen = ch.template == tt;
+                    ch.invalidate();
+                }
+            });
+            android.widget.GridLayout.LayoutParams lp = new android.widget.GridLayout.LayoutParams();
+            lp.width = Ui.dp(a, landscape ? 150 : 120);
+            lp.height = Ui.dp(a, landscape ? 130 : 180);
+            lp.setMargins(Ui.dp(a, 6), Ui.dp(a, 6), Ui.dp(a, 6), Ui.dp(a, 6));
+            grid.addView(chip, lp);
+        }
+        android.widget.CheckBox all = new android.widget.CheckBox(a);
+        all.setText("모든 페이지에 적용");
+        if (showApplyAll) root.addView(all);
+        ScrollView sv = new ScrollView(a);
+        sv.addView(root);
+        new AlertDialog.Builder(a).setTitle("속지 선택").setView(sv)
+                .setNegativeButton("취소", null)
+                .setPositiveButton("적용", (d, w) -> cb.on(chosen[0], all.isChecked()))
+                .show();
+    }
+
+    /** 종이 색을 미리보기 이미지로 고르는 창 (사용자 지정 색 포함) */
+    public static void paperPicker(Activity a, int template, boolean landscape, int current, IntCb cb) {
+        LinearLayout root = Ui.col(a);
+        int pad = Ui.dp(a, 16);
+        root.setPadding(pad, Ui.dp(a, 8), pad, 0);
+        android.widget.GridLayout grid = new android.widget.GridLayout(a);
+        grid.setColumnCount(4);
+        root.addView(grid);
+        ArrayList<Integer> colors = new ArrayList<>();
+        ArrayList<String> names = new ArrayList<>();
+        for (int i = 0; i < Paper.PAPER_COLORS.length; i++) {
+            colors.add(Paper.PAPER_COLORS[i]);
+            names.add(Paper.PAPER_NAMES[i]);
+        }
+        int[] extra = {0xFFFDF6E3, 0xFFFCE4EC, 0xFFEDE7F6, 0xFF37474F, 0xFF1B2A1E};
+        String[] extraNames = {"아이보리", "분홍", "라벤더", "차콜", "칠판"};
+        for (int i = 0; i < extra.length; i++) {
+            colors.add(extra[i]);
+            names.add(extraNames[i]);
+        }
+        for (int c : ColorPicker.Palette.load(a)) {
+            if (!colors.contains(c)) {
+                colors.add(c);
+                names.add("내 색 " + ColorPicker.hex(c));
+            }
+        }
+        if (!colors.contains(current)) {
+            colors.add(current);
+            names.add("현재 색");
+        }
+        final int[] chosen = {current};
+        final ArrayList<TemplateChip> chips = new ArrayList<>();
+        final AlertDialog[] dlg = new AlertDialog[1];
+        for (int i = 0; i < colors.size(); i++) {
+            TemplateChip chip = new TemplateChip(a, template, false);
+            int col = colors.get(i);
+            chip.paper = col;
+            chip.landscape = landscape;
+            chip.label = names.get(i);
+            chip.chosen = col == current;
+            chips.add(chip);
+            chip.setOnClickListener(v -> {
+                chosen[0] = col;
+                for (TemplateChip ch : chips) {
+                    ch.chosen = ch.paper == col;
+                    ch.invalidate();
+                }
+            });
+            android.widget.GridLayout.LayoutParams lp = new android.widget.GridLayout.LayoutParams();
+            lp.width = Ui.dp(a, landscape ? 150 : 110);
+            lp.height = Ui.dp(a, landscape ? 130 : 165);
+            lp.setMargins(Ui.dp(a, 6), Ui.dp(a, 6), Ui.dp(a, 6), Ui.dp(a, 6));
+            grid.addView(chip, lp);
+        }
+        TextView custom = Ui.pill(a, "🎨 직접 색 만들기", false);
+        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        clp.topMargin = Ui.dp(a, 8);
+        root.addView(custom, clp);
+        custom.setOnClickListener(v -> ColorPicker.show(a, chosen[0], c -> {
+            if (dlg[0] != null) dlg[0].dismiss();
+            cb.on(c);
+        }));
+        ScrollView sv = new ScrollView(a);
+        sv.addView(root);
+        dlg[0] = new AlertDialog.Builder(a).setTitle("종이 색").setView(sv)
+                .setNegativeButton("취소", null)
+                .setPositiveButton("적용", (d, w) -> cb.on(chosen[0]))
+                .show();
+    }
+
     private static TextView section(Context c, String s) {
         TextView t = Ui.label(c, s, 13, Ui.SUBTEXT, true);
         t.setPadding(0, Ui.dp(c, 14), 0, Ui.dp(c, 4));
@@ -259,7 +382,7 @@ public class Dialogs {
         if (!isP) root.addView(code);
 
         AlertDialog.Builder b = new AlertDialog.Builder(a)
-                .setTitle("JianNote Premium")
+                .setTitle("JianNote")
                 .setView(root)
                 .setNegativeButton("닫기", null);
         if (!isP) {

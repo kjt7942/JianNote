@@ -24,21 +24,31 @@ jobs:
           gradle-version: '8.9'
 
       - name: Build release APK
-        run: gradle assembleRelease --stacktrace --no-daemon
+        shell: bash
+        run: |
+          set -o pipefail
+          gradle assembleRelease --no-daemon 2>&1 | tee build.log
+
+      - name: Report build errors
+        if: failure()
+        shell: bash
+        run: |
+          msg=$(grep -E "error:|warning: \[|What went wrong|FAILED" -A2 build.log | head -80 | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
+          echo "::error title=Build failed::$msg"
 
       - name: Rename APK
-        run: cp app/build/outputs/apk/release/app-release.apk JianNotePremium-v1.0.${{ github.run_number }}.apk
+        run: cp app/build/outputs/apk/release/app-release.apk JianNote-v1.0.${{ github.run_number }}.apk
 
       - uses: actions/upload-artifact@v4
         with:
-          name: JianNotePremium-apk
-          path: JianNotePremium-*.apk
+          name: JianNote-apk
+          path: JianNote-*.apk
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
-          name: JianNotePremium v1.0.${{ github.run_number }}
+          name: JianNote v1.0.${{ github.run_number }}
           body: "갤럭시탭에서 APK를 다운로드해 설치하세요. (같은 서명이라 기존 앱 위에 업데이트 설치됩니다)"
-          files: JianNotePremium-*.apk
+          files: JianNote-*.apk
           make_latest: true

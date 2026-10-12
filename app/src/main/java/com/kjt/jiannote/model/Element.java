@@ -13,6 +13,7 @@ public abstract class Element {
     public static final byte T_STROKE = 1;
     public static final byte T_TEXT = 2;
     public static final byte T_IMAGE = 3;
+    public static final byte T_TEXT2 = 4;
 
     public abstract byte type();
 

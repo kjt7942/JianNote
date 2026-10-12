@@ -6,20 +6,15 @@ import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
-import android.graphics.Color;
 import android.graphics.Paint;
 import android.net.Uri;
 import android.os.Bundle;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.BaseAdapter;
 import android.widget.CheckBox;
 import android.widget.FrameLayout;
-import android.widget.GridLayout;
-import android.widget.GridView;
 import android.widget.HorizontalScrollView;
-import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.PopupMenu;
 import android.widget.PopupWindow;
@@ -34,6 +29,7 @@ import com.kjt.jiannote.model.NotebookMeta;
 import com.kjt.jiannote.model.Page;
 import com.kjt.jiannote.model.StrokeElem;
 import com.kjt.jiannote.model.TextElem;
+import com.kjt.jiannote.render.Fonts;
 import com.kjt.jiannote.render.Paper;
 import com.kjt.jiannote.render.RenderContext;
 import com.kjt.jiannote.render.Renderer;
@@ -45,7 +41,7 @@ import java.io.OutputStream;
 import java.util.UUID;
 
 /** 노트 편집 화면 */
-public class EditorActivity extends Activity implements CanvasView.Listener {
+public class EditorActivity extends Activity implements CanvasView.Listener, PagePanel.Host {
     private static final int REQ_IMAGE = 11;
 
     private Store store;
@@ -55,14 +51,15 @@ public class EditorActivity extends Activity implements CanvasView.Listener {
     private Document doc;
     private RenderContext rc;
     private CanvasView canvas;
+    private PagePanel pagePanel;
     private boolean dirty;
 
     private final TextView[] toolBtns = new TextView[7];
-    private TextView undoBtn, redoBtn, pageLabel, zoomLabel, fingerBtn, layerBtn;
+    private TextView undoBtn, redoBtn, pageLabel, zoomLabel, fingerBtn, layerBtn, editTextBtn;
     private LinearLayout selBar;
     private Ui.Dot widthDot;
     private final Ui.Swatch[] quick = new Ui.Swatch[5];
-    private int[] quickColors = {0xFF1A1A1A, 0xFF2563EB, 0xFFDC2626, 0xFF16A34A, 0xFFF97316};
+    private final int[] quickColors = {0xFF1A1A1A, 0xFF2563EB, 0xFFDC2626, 0xFF16A34A, 0xFFF97316};
     private PopupWindow popup;
     private PopupWindow layerPopup;
     private LinearLayout layerList;
@@ -75,6 +72,7 @@ public class EditorActivity extends Activity implements CanvasView.Listener {
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
+        Fonts.init(getAssets());
         store = new Store(this);
         premium = new Premium(this);
         prefs = new Prefs(this);
@@ -110,6 +108,8 @@ public class EditorActivity extends Activity implements CanvasView.Listener {
         slp.topMargin = Ui.dp(this, 12);
         body.addView(selBar, slp);
         selBar.setVisibility(View.GONE);
+        pagePanel = new PagePanel(this, canvas, rc, this);
+        body.addView(pagePanel, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         root.addView(body, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         root.addView(Ui.divider(this, false));
@@ -119,6 +119,15 @@ public class EditorActivity extends Activity implements CanvasView.Listener {
         selectTool(canvas.tool);
         updateHistory();
         onPageChanged();
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (pagePanel != null && pagePanel.isOpen()) {
+            pagePanel.hide();
+            return;
+        }
+        super.onBackPressed();
     }
 
     private void loadToolPrefs() {
@@ -132,11 +141,17 @@ public class EditorActivity extends Activity implements CanvasView.Listener {
         canvas.eraserSize = prefs.f("eraserSize", 24f);
         canvas.eraserPartial = prefs.b("eraserPartial", true);
         canvas.shapeType = prefs.i("shapeType", ShapeRecognizer.RECT);
-        canvas.textSize = prefs.f("textSize", 40f);
         canvas.fingerDraw = prefs.b("fingerDraw", false);
         canvas.pressureEnabled = prefs.b("pressure", true);
         canvas.pressureGamma = prefs.f("gamma", 1f);
         canvas.holdToShape = prefs.b("holdToShape", true);
+        TextElem.Style ts = canvas.textStyle;
+        ts.font = prefs.i("txFont", 1);
+        ts.size = prefs.f("textSize", 40f);
+        ts.color = prefs.i("txColor", 0xFF1A1A1A);
+        ts.flags = prefs.i("txFlags", 0);
+        ts.bg = prefs.i("txBg", 0);
+        ts.align = prefs.i("txAlign", 0);
     }
 
     private void saveToolPrefs() {
@@ -149,11 +164,17 @@ public class EditorActivity extends Activity implements CanvasView.Listener {
         prefs.put("eraserSize", canvas.eraserSize);
         prefs.put("eraserPartial", canvas.eraserPartial);
         prefs.put("shapeType", canvas.shapeType);
-        prefs.put("textSize", canvas.textSize);
         prefs.put("fingerDraw", canvas.fingerDraw);
         prefs.put("pressure", canvas.pressureEnabled);
         prefs.put("gamma", canvas.pressureGamma);
         prefs.put("holdToShape", canvas.holdToShape);
+        TextElem.Style ts = canvas.textStyle;
+        prefs.put("txFont", ts.font);
+        prefs.put("textSize", ts.size);
+        prefs.put("txColor", ts.color);
+        prefs.put("txFlags", ts.flags);
+        prefs.put("txBg", ts.bg);
+        prefs.put("txAlign", ts.align);
     }
 
     // =============== 상단 도구 막대 ===============
@@ -182,6 +203,7 @@ public class EditorActivity extends Activity implements CanvasView.Listener {
         bar.addView(title);
         bar.addView(Ui.divider(this, true));
 
+        // 그리기 도구 (이동 도구는 손가락 버튼 옆에 따로 배치)
         for (int i = 0; i < TOOLS.length; i++) {
             TextView t = Ui.toolButton(this, TOOLS[i][0], TOOLS[i][1]);
             final int tool = i;
@@ -190,7 +212,7 @@ public class EditorActivity extends Activity implements CanvasView.Listener {
                 else selectTool(tool);
             });
             toolBtns[i] = t;
-            bar.addView(t);
+            if (i != CanvasView.TOOL_HAND) bar.addView(t);
         }
         TextView img = Ui.toolButton(this, "🖼️", "이미지");
         img.setOnClickListener(v -> pickImage());
@@ -198,18 +220,7 @@ public class EditorActivity extends Activity implements CanvasView.Listener {
         bar.addView(Ui.divider(this, true));
 
         for (int i = 0; i < 5; i++) {
-            Ui.Swatch s = new Ui.Swatch(this, quickColors[i]);
-            final int slot = i;
-            s.setOnClickListener(v -> applyColor(quickColors[slot]));
-            s.setOnLongClickListener(v -> {
-                colorPicker(c -> {
-                    quickColors[slot] = c;
-                    prefs.put("quick" + slot, c);
-                    rebuildQuick(slot, c);
-                    applyColor(c);
-                });
-                return true;
-            });
+            Ui.Swatch s = makeQuick(i, quickColors[i]);
             quick[i] = s;
             bar.addView(s, new LinearLayout.LayoutParams(Ui.dp(this, 36), Ui.dp(this, 36)));
         }
@@ -233,9 +244,10 @@ public class EditorActivity extends Activity implements CanvasView.Listener {
         fingerBtn.setOnClickListener(v -> {
             canvas.fingerDraw = !canvas.fingerDraw;
             updateFinger();
-            Toast.makeText(this, canvas.fingerDraw ? "손가락 필기 켜짐 (두 손가락으로 이동)" : "S펜으로만 필기 (손가락은 이동/확대)", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, canvas.fingerDraw ? "손가락 필기 켜짐 (두 손가락으로 이동)" : "S펜으로만 필기 (손가락은 스크롤/확대)", Toast.LENGTH_SHORT).show();
         });
         bar.addView(fingerBtn);
+        bar.addView(toolBtns[CanvasView.TOOL_HAND]);
         updateFinger();
         TextView more = Ui.toolButton(this, "⋯", "더보기");
         more.setOnClickListener(this::showMenu);
@@ -243,14 +255,11 @@ public class EditorActivity extends Activity implements CanvasView.Listener {
         return hs;
     }
 
-    private void rebuildQuick(int slot, int color) {
-        Ui.Swatch old = quick[slot];
-        ViewGroup parent = (ViewGroup) old.getParent();
-        int idx = parent.indexOfChild(old);
+    private Ui.Swatch makeQuick(int slot, int color) {
         Ui.Swatch s = new Ui.Swatch(this, color);
         s.setOnClickListener(v -> applyColor(quickColors[slot]));
         s.setOnLongClickListener(v -> {
-            colorPicker(c -> {
+            ColorPicker.show(this, quickColors[slot], c -> {
                 quickColors[slot] = c;
                 prefs.put("quick" + slot, c);
                 rebuildQuick(slot, c);
@@ -258,9 +267,18 @@ public class EditorActivity extends Activity implements CanvasView.Listener {
             });
             return true;
         });
+        return s;
+    }
+
+    private void rebuildQuick(int slot, int color) {
+        Ui.Swatch old = quick[slot];
+        ViewGroup parent = (ViewGroup) old.getParent();
+        int idx = parent.indexOfChild(old);
+        Ui.Swatch s = makeQuick(slot, color);
         parent.removeViewAt(idx);
         parent.addView(s, idx, new LinearLayout.LayoutParams(Ui.dp(this, 36), Ui.dp(this, 36)));
         quick[slot] = s;
+        updateDot();
     }
 
     private void updateFinger() {
@@ -276,7 +294,11 @@ public class EditorActivity extends Activity implements CanvasView.Listener {
     }
 
     private int currentColor() {
-        return canvas.tool == CanvasView.TOOL_HIGHLIGHTER ? canvas.hlColor : canvas.penColor;
+        switch (canvas.tool) {
+            case CanvasView.TOOL_HIGHLIGHTER: return canvas.hlColor;
+            case CanvasView.TOOL_TEXT: return canvas.textStyle.color;
+            default: return canvas.penColor;
+        }
     }
 
     private void applyColor(int c) {
@@ -284,8 +306,11 @@ public class EditorActivity extends Activity implements CanvasView.Listener {
             canvas.recolorSelection(c);
             return;
         }
-        if (canvas.tool == CanvasView.TOOL_HIGHLIGHTER) canvas.hlColor = c;
-        else {
+        if (canvas.tool == CanvasView.TOOL_HIGHLIGHTER) {
+            canvas.hlColor = c;
+        } else if (canvas.tool == CanvasView.TOOL_TEXT) {
+            canvas.textStyle.color = c;
+        } else {
             canvas.penColor = c;
             if (canvas.tool == CanvasView.TOOL_ERASER || canvas.tool == CanvasView.TOOL_HAND || canvas.tool == CanvasView.TOOL_LASSO) {
                 selectTool(CanvasView.TOOL_PEN);
@@ -300,7 +325,7 @@ public class EditorActivity extends Activity implements CanvasView.Listener {
         switch (canvas.tool) {
             case CanvasView.TOOL_HIGHLIGHTER: w = canvas.hlWidth * 0.6f; break;
             case CanvasView.TOOL_ERASER: w = canvas.eraserSize; break;
-            case CanvasView.TOOL_TEXT: w = canvas.textSize * 0.4f; break;
+            case CanvasView.TOOL_TEXT: w = canvas.textStyle.size * 0.4f; break;
             default: w = canvas.penWidth * 1.5f + 2; break;
         }
         widthDot.set(Math.min(w, 30 * d), canvas.tool == CanvasView.TOOL_ERASER ? 0xFFBDBDBD : currentColor());
@@ -316,23 +341,31 @@ public class EditorActivity extends Activity implements CanvasView.Listener {
         bar.setBackground(Ui.round(0xFF2B2B33, Ui.dp(this, 24)));
         bar.setElevation(Ui.dp(this, 6));
         bar.setPadding(Ui.dp(this, 10), Ui.dp(this, 4), Ui.dp(this, 10), Ui.dp(this, 4));
-        String[][] items = {{"🗑️", "삭제"}, {"📄", "복제"}, {"🎨", "색상"}, {"📚", "레이어로"}, {"✖", "해제"}};
+        String[][] items = {{"✏️", "글자편집"}, {"🗑️", "삭제"}, {"📄", "복제"}, {"🎨", "색상"}, {"📚", "레이어로"}, {"✖", "해제"}};
         for (int i = 0; i < items.length; i++) {
             TextView t = Ui.toolButton(this, items[i][0], items[i][1]);
-            t.setTextColor(Color.WHITE);
+            t.setTextColor(0xFFFFFFFF);
             final int k = i;
             t.setOnClickListener(v -> {
                 switch (k) {
-                    case 0: canvas.deleteSelection(); break;
-                    case 1: canvas.duplicateSelection(); break;
-                    case 2: colorPicker(c -> canvas.recolorSelection(c)); break;
-                    case 3: chooseLayerForSelection(); break;
+                    case 0: editSelectedText(); break;
+                    case 1: canvas.deleteSelection(); break;
+                    case 2: canvas.duplicateSelection(); break;
+                    case 3: ColorPicker.show(this, canvas.penColor, c -> canvas.recolorSelection(c)); break;
+                    case 4: chooseLayerForSelection(); break;
                     default: canvas.clearSelection(); break;
                 }
             });
+            if (i == 0) editTextBtn = t;
             bar.addView(t);
         }
         return bar;
+    }
+
+    private void editSelectedText() {
+        TextElem t = canvas.singleSelectedText();
+        if (t == null) return;
+        TextTools.edit(this, t.text, t.style, true, (text, st) -> canvas.editSelectedText(t, text, st));
     }
 
     private void chooseLayerForSelection() {
@@ -359,31 +392,27 @@ public class EditorActivity extends Activity implements CanvasView.Listener {
             home.setTextSize(14);
             home.setOnClickListener(v -> canvas.resetInfiniteView());
             bar.addView(home);
-            TextView tip = Ui.label(this, "   ∞ 무한 캔버스 — 한 손가락으로 이동, 두 손가락으로 확대/축소   ", 13, Ui.SUBTEXT, false);
-            bar.addView(tip);
+            bar.addView(Ui.label(this, "   ∞ 무한 캔버스 — 한 손가락으로 이동, 두 손가락으로 확대/축소   ", 13, Ui.SUBTEXT, false));
         } else {
-            TextView prev = Ui.toolButton(this, "◀", null);
+            TextView prev = Ui.toolButton(this, "▲", null);
             prev.setOnClickListener(v -> canvas.goToPage(canvas.pageIndex() - 1));
             bar.addView(prev);
             pageLabel = Ui.label(this, "1 / 1", 14, Ui.TEXT, true);
-            pageLabel.setPadding(Ui.dp(this, 10), 0, Ui.dp(this, 10), 0);
-            pageLabel.setOnClickListener(v -> showPageGrid());
+            pageLabel.setPadding(Ui.dp(this, 10), Ui.dp(this, 10), Ui.dp(this, 10), Ui.dp(this, 10));
+            pageLabel.setOnClickListener(v -> togglePanel());
             bar.addView(pageLabel);
-            TextView next = Ui.toolButton(this, "▶", null);
-            next.setOnClickListener(v -> {
-                if (canvas.pageIndex() == canvas.pageCount() - 1) addPage();
-                else canvas.goToPage(canvas.pageIndex() + 1);
-            });
+            TextView next = Ui.toolButton(this, "▼", null);
+            next.setOnClickListener(v -> canvas.goToPage(canvas.pageIndex() + 1));
             bar.addView(next);
             bar.addView(Ui.divider(this, true));
             TextView add = Ui.toolButton(this, "＋ 페이지", null);
             add.setTextSize(14);
             add.setOnClickListener(v -> addPage());
             bar.addView(add);
-            TextView grid = Ui.toolButton(this, "📑 페이지 목록", null);
-            grid.setTextSize(14);
-            grid.setOnClickListener(v -> showPageGrid());
-            bar.addView(grid);
+            TextView panel = Ui.toolButton(this, "📑 페이지 보기", null);
+            panel.setTextSize(14);
+            panel.setOnClickListener(v -> togglePanel());
+            bar.addView(panel);
             TextView pm = Ui.toolButton(this, "⋯ 페이지", null);
             pm.setTextSize(14);
             pm.setOnClickListener(this::showPageMenu);
@@ -397,31 +426,44 @@ public class EditorActivity extends Activity implements CanvasView.Listener {
         return bar;
     }
 
+    private void togglePanel() {
+        if (pagePanel.isOpen()) pagePanel.hide();
+        else pagePanel.show();
+    }
+
     private void addPage() {
         Page cur = canvas.page();
-        Page p = Page.create(cur.w, cur.h, cur.template);
-        canvas.addPage(p, canvas.pageIndex() + 1);
+        canvas.addPage(Page.create(cur.w, cur.h, cur.template), canvas.pageIndex() + 1);
+        if (pagePanel.isOpen()) pagePanel.rebuild();
     }
 
     private void showPageMenu(View anchor) {
         PopupMenu pm = new PopupMenu(this, anchor);
+        Page cur = canvas.page();
         pm.getMenu().add(0, 1, 0, "현재 페이지 뒤에 새 페이지");
         pm.getMenu().add(0, 2, 0, "현재 페이지 복제");
-        pm.getMenu().add(0, 3, 0, "페이지 앞으로 이동");
-        pm.getMenu().add(0, 4, 0, "페이지 뒤로 이동");
-        pm.getMenu().add(0, 5, 0, "이 페이지 속지 변경");
-        pm.getMenu().add(0, 6, 0, "현재 페이지 삭제");
+        pm.getMenu().add(0, 3, 0, cur.bookmarked ? "북마크 해제" : "🔖 북마크");
+        pm.getMenu().add(0, 4, 0, "페이지 위로 이동");
+        pm.getMenu().add(0, 5, 0, "페이지 아래로 이동");
+        pm.getMenu().add(0, 6, 0, "속지 변경");
+        pm.getMenu().add(0, 7, 0, "현재 페이지 삭제");
         pm.setOnMenuItemClickListener(item -> {
             int i = canvas.pageIndex();
             switch (item.getItemId()) {
                 case 1: addPage(); break;
                 case 2: canvas.addPage(canvas.page().copy(), i + 1); break;
-                case 3: canvas.movePage(i, i - 1); break;
-                case 4: canvas.movePage(i, i + 1); break;
-                case 5: chooseTemplateForPage(); break;
-                case 6: confirmDeletePage(i); break;
+                case 3:
+                    cur.bookmarked = !cur.bookmarked;
+                    dirty = true;
+                    Toast.makeText(this, cur.bookmarked ? "북마크했습니다" : "북마크 해제", Toast.LENGTH_SHORT).show();
+                    break;
+                case 4: canvas.movePage(i, i - 1); break;
+                case 5: canvas.movePage(i, i + 1); break;
+                case 6: chooseTemplate(); break;
+                case 7: confirmDeletePage(i); break;
                 default: break;
             }
+            if (pagePanel.isOpen()) pagePanel.rebuild();
             return true;
         });
         pm.show();
@@ -435,73 +477,41 @@ public class EditorActivity extends Activity implements CanvasView.Listener {
         new AlertDialog.Builder(this).setTitle("페이지 삭제")
                 .setMessage((i + 1) + "페이지를 삭제할까요?")
                 .setNegativeButton("취소", null)
-                .setPositiveButton("삭제", (d, w) -> canvas.deletePage(i))
-                .show();
-    }
-
-    private void chooseTemplateForPage() {
-        String[] names = new String[Paper.COUNT];
-        for (int i = 0; i < Paper.COUNT; i++) {
-            names[i] = (Paper.isPremium(i) && !premium.isPremium() ? "👑 " : "") + Paper.NAMES[i];
-        }
-        new AlertDialog.Builder(this).setTitle("속지 선택")
-                .setItems(names, (d, w) -> {
-                    if (Paper.isPremium(w) && !premium.isPremium()) {
-                        Dialogs.limit(this, premium, "'" + Paper.NAMES[w] + "' 속지는 프리미엄 전용입니다.", null);
-                        return;
-                    }
-                    canvas.page().template = w;
-                    dirty = true;
-                    canvas.invalidateScene();
+                .setPositiveButton("삭제", (d, w) -> {
+                    canvas.deletePage(i);
+                    if (pagePanel.isOpen()) pagePanel.rebuild();
                 })
                 .show();
     }
 
-    private void showPageGrid() {
-        GridView g = new GridView(this);
-        g.setNumColumns(GridView.AUTO_FIT);
-        g.setColumnWidth(Ui.dp(this, 130));
-        g.setVerticalSpacing(Ui.dp(this, 12));
-        g.setHorizontalSpacing(Ui.dp(this, 12));
-        g.setPadding(Ui.dp(this, 12), Ui.dp(this, 12), Ui.dp(this, 12), Ui.dp(this, 12));
-        final java.util.HashMap<Integer, Bitmap> cache = new java.util.HashMap<>();
-        AlertDialog dlg = new AlertDialog.Builder(this).setTitle("페이지 (" + canvas.pageCount() + ")")
-                .setView(g).setNegativeButton("닫기", null).create();
-        g.setAdapter(new BaseAdapter() {
-            @Override
-            public int getCount() { return canvas.pageCount(); }
+    /** 속지를 이미지로 보면서 선택 */
+    private void chooseTemplate() {
+        Page cur = canvas.page();
+        boolean land = !cur.isInfinite() && cur.w > cur.h;
+        Dialogs.templatePicker(this, premium, meta.paperColor, land, cur.template, !meta.infinite && canvas.pageCount() > 1,
+                (t, all) -> {
+                    if (all) {
+                        for (Page p : doc.pages) p.template = t;
+                    } else {
+                        cur.template = t;
+                    }
+                    meta.template = t;
+                    dirty = true;
+                    canvas.invalidateScene();
+                    if (pagePanel.isOpen()) pagePanel.rebuild();
+                });
+    }
 
-            @Override
-            public Object getItem(int i) { return i; }
-
-            @Override
-            public long getItemId(int i) { return i; }
-
-            @Override
-            public View getView(int pos, View convert, ViewGroup parent) {
-                LinearLayout box = Ui.col(EditorActivity.this);
-                box.setGravity(Gravity.CENTER_HORIZONTAL);
-                ImageView iv = new ImageView(EditorActivity.this);
-                Bitmap bm = cache.get(pos);
-                if (bm == null) {
-                    bm = Renderer.thumbnail(doc.pages.get(pos), meta.paperColor, rc, 240, 340);
-                    cache.put(pos, bm);
-                }
-                iv.setImageBitmap(bm);
-                iv.setAdjustViewBounds(true);
-                int pad = Ui.dp(EditorActivity.this, 3);
-                iv.setPadding(pad, pad, pad, pad);
-                iv.setBackground(Ui.round(pos == canvas.pageIndex() ? Ui.ACCENT : 0x22000000, Ui.dp(EditorActivity.this, 4)));
-                box.addView(iv, new LinearLayout.LayoutParams(Ui.dp(EditorActivity.this, 120), ViewGroup.LayoutParams.WRAP_CONTENT));
-                box.addView(Ui.label(EditorActivity.this, String.valueOf(pos + 1), 12, Ui.SUBTEXT, false));
-                return box;
-            }
+    /** 종이 색을 이미지로 보면서 선택 */
+    private void choosePaper() {
+        Page cur = canvas.page();
+        boolean land = !cur.isInfinite() && cur.w > cur.h;
+        Dialogs.paperPicker(this, cur.template, land, meta.paperColor, c -> {
+            meta.paperColor = c;
+            canvas.setPaperColor(c);
+            dirty = true;
+            if (pagePanel.isOpen()) pagePanel.rebuild();
         });
-        g.setOnItemClickListener((p, v, pos, id) -> {
-            canvas.goToPage(pos);
-            dlg.dismiss();
-        });
-        dlg.show();
     }
 
     // =============== 더보기 메뉴 ===============
@@ -510,7 +520,7 @@ public class EditorActivity extends Activity implements CanvasView.Listener {
         PopupMenu pm = new PopupMenu(this, anchor);
         pm.getMenu().add(0, 1, 0, "📄 PDF로 내보내기" + (premium.isPremium() ? "" : " (워터마크)"));
         pm.getMenu().add(0, 2, 0, "🖼️ 현재 페이지를 이미지로 저장");
-        pm.getMenu().add(0, 3, 0, "📃 이 페이지 속지 변경");
+        pm.getMenu().add(0, 3, 0, "📃 속지 변경");
         pm.getMenu().add(0, 4, 0, "🎨 종이 색 변경");
         pm.getMenu().add(0, 5, 0, "✒️ 필압 / 펜 설정");
         pm.getMenu().add(0, 6, 0, "👑 프리미엄");
@@ -518,7 +528,7 @@ public class EditorActivity extends Activity implements CanvasView.Listener {
             switch (item.getItemId()) {
                 case 1: exportPdf(); break;
                 case 2: exportPng(); break;
-                case 3: chooseTemplateForPage(); break;
+                case 3: chooseTemplate(); break;
                 case 4: choosePaper(); break;
                 case 5: selectTool(CanvasView.TOOL_PEN); showToolOptions(toolBtns[0]); break;
                 case 6: Dialogs.premium(this, premium, null); break;
@@ -527,15 +537,6 @@ public class EditorActivity extends Activity implements CanvasView.Listener {
             return true;
         });
         pm.show();
-    }
-
-    private void choosePaper() {
-        new AlertDialog.Builder(this).setTitle("종이 색")
-                .setItems(Paper.PAPER_NAMES, (d, w) -> {
-                    meta.paperColor = Paper.PAPER_COLORS[w];
-                    canvas.setPaperColor(meta.paperColor);
-                    dirty = true;
-                }).show();
     }
 
     private void exportPdf() {
@@ -572,21 +573,28 @@ public class EditorActivity extends Activity implements CanvasView.Listener {
         LinearLayout box = Ui.col(this);
         int p = Ui.dp(this, 16);
         box.setPadding(p, p, p, p);
-        box.setBackground(Ui.round(Ui.SURFACE, Ui.dp(this, 16)));
+        int width = 380;
         switch (canvas.tool) {
             case CanvasView.TOOL_PEN: penOptions(box); break;
             case CanvasView.TOOL_HIGHLIGHTER: hlOptions(box); break;
             case CanvasView.TOOL_ERASER: eraserOptions(box); break;
             case CanvasView.TOOL_SHAPE: shapeOptions(box); break;
-            case CanvasView.TOOL_TEXT: textOptions(box); break;
+            case CanvasView.TOOL_TEXT:
+                width = 440;
+                box.addView(Ui.label(this, "텍스트를 넣을 곳을 탭하세요. 기존 텍스트를 탭하면 수정합니다.\n아래 서식은 새로 입력하는 텍스트에 적용됩니다.", 13, Ui.TEXT, false));
+                box.addView(TextTools.controls(this, canvas.textStyle, this::updateDot));
+                break;
             case CanvasView.TOOL_LASSO:
-                box.addView(Ui.label(this, "올가미로 영역을 둘러 선택하세요.\n• 선택 상자 안을 끌면 이동\n• 오른쪽 아래 파란 점을 끌면 크기 조절\n• 위쪽 막대에서 삭제·복제·색상·레이어 이동", 14, Ui.TEXT, false));
+                box.addView(Ui.label(this, "올가미로 영역을 둘러 선택하세요.\n• 선택 상자 안을 끌면 이동\n• 오른쪽 아래 파란 점을 끌면 크기 조절\n• 위쪽 막대에서 글자편집·삭제·복제·색상·레이어 이동", 14, Ui.TEXT, false));
                 break;
             default: return;
         }
         ScrollView sv = new ScrollView(this);
         sv.addView(box);
-        popup = new PopupWindow(sv, Ui.dp(this, 360), ViewGroup.LayoutParams.WRAP_CONTENT, true);
+        int maxH = (int) (getResources().getDisplayMetrics().heightPixels * 0.78f);
+        popup = new PopupWindow(sv, Ui.dp(this, width), ViewGroup.LayoutParams.WRAP_CONTENT, true);
+        sv.measure(View.MeasureSpec.makeMeasureSpec(Ui.dp(this, width), View.MeasureSpec.EXACTLY), View.MeasureSpec.UNSPECIFIED);
+        if (sv.getMeasuredHeight() > maxH) popup.setHeight(maxH);
         popup.setElevation(Ui.dp(this, 12));
         popup.setBackgroundDrawable(Ui.round(Ui.SURFACE, Ui.dp(this, 16)));
         popup.setOutsideTouchable(true);
@@ -613,13 +621,13 @@ public class EditorActivity extends Activity implements CanvasView.Listener {
             btns[i] = t;
             t.setOnClickListener(x -> {
                 canvas.penType = v;
-                for (int j = 0; j < 3; j++) markPill(btns[j], vals[j] == v);
+                for (int j = 0; j < 3; j++) TextTools.markPill(this, btns[j], vals[j] == v);
                 prev.invalidate();
             });
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
             lp.setMargins(Ui.dp(this, 3), 0, Ui.dp(this, 3), 0);
             types.addView(t, lp);
-            markPill(t, canvas.penType == v);
+            TextTools.markPill(this, t, canvas.penType == v);
         }
         box.addView(types);
         box.addView(prev, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 70)));
@@ -634,7 +642,7 @@ public class EditorActivity extends Activity implements CanvasView.Listener {
         }));
 
         box.addView(title("색상"));
-        box.addView(colorGrid(Ui.PEN_COLORS, c -> {
+        box.addView(ColorPicker.grid(this, Ui.PEN_COLORS, canvas.penColor, c -> {
             canvas.penColor = c;
             prev.invalidate();
             updateDot();
@@ -678,7 +686,7 @@ public class EditorActivity extends Activity implements CanvasView.Listener {
             updateDot();
         }));
         box.addView(title("색상"));
-        box.addView(colorGrid(Ui.HL_COLORS, c -> {
+        box.addView(ColorPicker.grid(this, Ui.HL_COLORS, canvas.hlColor, c -> {
             canvas.hlColor = c;
             updateDot();
         }));
@@ -696,17 +704,17 @@ public class EditorActivity extends Activity implements CanvasView.Listener {
         LinearLayout r = Ui.row(this);
         TextView part = Ui.pill(this, "부분 지우개", false);
         TextView whole = Ui.pill(this, "획 지우개", false);
-        markPill(part, canvas.eraserPartial);
-        markPill(whole, !canvas.eraserPartial);
+        TextTools.markPill(this, part, canvas.eraserPartial);
+        TextTools.markPill(this, whole, !canvas.eraserPartial);
         part.setOnClickListener(v -> {
             canvas.eraserPartial = true;
-            markPill(part, true);
-            markPill(whole, false);
+            TextTools.markPill(this, part, true);
+            TextTools.markPill(this, whole, false);
         });
         whole.setOnClickListener(v -> {
             canvas.eraserPartial = false;
-            markPill(part, false);
-            markPill(whole, true);
+            TextTools.markPill(this, part, false);
+            TextTools.markPill(this, whole, true);
         });
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         lp.setMargins(Ui.dp(this, 3), 0, Ui.dp(this, 3), 0);
@@ -742,9 +750,9 @@ public class EditorActivity extends Activity implements CanvasView.Listener {
             btns[i] = t;
             t.setOnClickListener(v -> {
                 canvas.shapeType = s;
-                for (int j = 0; j < btns.length; j++) markPill(btns[j], j == s);
+                for (int j = 0; j < btns.length; j++) TextTools.markPill(this, btns[j], j == s);
             });
-            markPill(t, canvas.shapeType == i);
+            TextTools.markPill(this, t, canvas.shapeType == i);
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
             lp.setMargins(Ui.dp(this, 2), 0, Ui.dp(this, 2), 0);
             r.addView(t, lp);
@@ -758,23 +766,7 @@ public class EditorActivity extends Activity implements CanvasView.Listener {
             updateDot();
         }));
         box.addView(title("색상"));
-        box.addView(colorGrid(Ui.PEN_COLORS, c -> {
-            canvas.penColor = c;
-            updateDot();
-        }));
-    }
-
-    private void textOptions(LinearLayout box) {
-        box.addView(Ui.label(this, "텍스트를 넣을 위치를 탭하세요. 기존 텍스트를 탭하면 수정합니다.", 13, Ui.TEXT, false));
-        TextView wl = title("글자 크기: " + fmt(canvas.textSize));
-        box.addView(wl);
-        box.addView(Ui.seek(this, 104, (int) canvas.textSize - 16, v -> {
-            canvas.textSize = v + 16;
-            wl.setText("글자 크기: " + fmt(canvas.textSize));
-            updateDot();
-        }));
-        box.addView(title("색상"));
-        box.addView(colorGrid(Ui.PEN_COLORS, c -> {
+        box.addView(ColorPicker.grid(this, Ui.PEN_COLORS, canvas.penColor, c -> {
             canvas.penColor = c;
             updateDot();
         }));
@@ -784,99 +776,18 @@ public class EditorActivity extends Activity implements CanvasView.Listener {
         return String.valueOf(Math.round(f));
     }
 
-    private void markPill(TextView t, boolean on) {
-        t.setBackground(on ? Ui.ripple(Ui.ACCENT, Ui.dp(this, 22)) : Ui.ripple(0xFFECE8DF, Ui.dp(this, 22)));
-        t.setTextColor(on ? Color.WHITE : Ui.TEXT);
-    }
-
-    private View colorGrid(int[] colors, Ui.IntCb cb) {
-        GridLayout g = new GridLayout(this);
-        g.setColumnCount(8);
-        int sz = Ui.dp(this, 38);
-        final Ui.Swatch[] sws = new Ui.Swatch[colors.length + 1];
-        int cur = currentColor();
-        for (int i = 0; i < colors.length; i++) {
-            Ui.Swatch s = new Ui.Swatch(this, colors[i]);
-            s.setChosen(colors[i] == cur);
-            sws[i] = s;
-            final int c = colors[i];
-            s.setOnClickListener(v -> {
-                for (Ui.Swatch o : sws) if (o != null) o.setChosen(o == s);
-                cb.on(c);
-            });
-            GridLayout.LayoutParams lp = new GridLayout.LayoutParams();
-            lp.width = sz;
-            lp.height = sz;
-            g.addView(s, lp);
-        }
-        TextView custom = Ui.label(this, "＋", 20, Ui.SUBTEXT, true);
-        custom.setGravity(Gravity.CENTER);
-        custom.setOnClickListener(v -> colorPicker(c -> {
-            cb.on(c);
-            for (Ui.Swatch o : sws) if (o != null) o.setChosen(false);
-        }));
-        GridLayout.LayoutParams lp = new GridLayout.LayoutParams();
-        lp.width = sz;
-        lp.height = sz;
-        g.addView(custom, lp);
-        return g;
-    }
-
-    /** RGB 색상 선택 */
-    private void colorPicker(Ui.IntCb cb) {
-        final int[] rgb = {Color.red(currentColor()), Color.green(currentColor()), Color.blue(currentColor())};
-        LinearLayout box = Ui.col(this);
-        int p = Ui.dp(this, 20);
-        box.setPadding(p, p, p, 0);
-        View preview = new View(this);
-        preview.setBackground(Ui.round(Color.rgb(rgb[0], rgb[1], rgb[2]), Ui.dp(this, 12)));
-        box.addView(preview, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 56)));
-        GridLayout presets = new GridLayout(this);
-        presets.setColumnCount(8);
-        String[] names = {"빨강 R", "초록 G", "파랑 B"};
-        SeekBar[] bars = new SeekBar[3];
-        for (int i = 0; i < 3; i++) {
-            box.addView(title(names[i]));
-            final int k = i;
-            bars[i] = Ui.seek(this, 255, rgb[i], v -> {
-                rgb[k] = v;
-                preview.setBackground(Ui.round(Color.rgb(rgb[0], rgb[1], rgb[2]), Ui.dp(this, 12)));
-            });
-            box.addView(bars[i]);
-        }
-        box.addView(title("기본 색"));
-        for (int c : Ui.PEN_COLORS) {
-            Ui.Swatch s = new Ui.Swatch(this, c);
-            s.setOnClickListener(v -> {
-                rgb[0] = Color.red(c);
-                rgb[1] = Color.green(c);
-                rgb[2] = Color.blue(c);
-                for (int i = 0; i < 3; i++) bars[i].setProgress(rgb[i]);
-                preview.setBackground(Ui.round(c, Ui.dp(this, 12)));
-            });
-            GridLayout.LayoutParams lp = new GridLayout.LayoutParams();
-            lp.width = Ui.dp(this, 36);
-            lp.height = Ui.dp(this, 36);
-            presets.addView(s, lp);
-        }
-        box.addView(presets);
-        new AlertDialog.Builder(this).setTitle("색상 선택").setView(box)
-                .setNegativeButton("취소", null)
-                .setPositiveButton("확인", (d, w) -> cb.on(Color.rgb(rgb[0], rgb[1], rgb[2])))
-                .show();
-    }
-
     /** 펜 미리보기 (필압 변화 시뮬레이션) */
     private class StrokePreview extends View {
+        private final Paint bg = new Paint();
+
         StrokePreview() {
             super(EditorActivity.this);
+            bg.setColor(0xFFF7F5F0);
         }
 
         @Override
         protected void onDraw(Canvas c) {
             float w = getWidth(), h = getHeight();
-            Paint bg = new Paint();
-            bg.setColor(0xFFF7F5F0);
             c.drawRoundRect(0, 0, w, h, 16, 16, bg);
             StrokeElem s = new StrokeElem(canvas.penType, canvas.penColor);
             int steps = 80;
@@ -907,7 +818,8 @@ public class EditorActivity extends Activity implements CanvasView.Listener {
         int p = Ui.dp(this, 14);
         box.setPadding(p, p, p, p);
         LinearLayout head = Ui.row(this);
-        head.addView(Ui.label(this, "레이어", 16, Ui.TEXT, true), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        head.addView(Ui.label(this, "레이어 · " + (canvas.pageIndex() + 1) + "페이지", 16, Ui.TEXT, true),
+                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         TextView add = Ui.pill(this, "＋ 추가", true);
         add.setTextSize(13);
         add.setOnClickListener(v -> {
@@ -1113,18 +1025,34 @@ public class EditorActivity extends Activity implements CanvasView.Listener {
         if (dirty) save();
     }
 
+    // =============== PagePanel.Host ===============
+
+    @Override
+    public int paperColor() {
+        return meta.paperColor;
+    }
+
+    @Override
+    public void onPagesEdited() {
+        dirty = true;
+        canvas.invalidateScene();
+        updateHistory();
+    }
+
     // =============== CanvasView.Listener ===============
 
     @Override
     public void onPageChanged() {
         if (pageLabel != null) pageLabel.setText((canvas.pageIndex() + 1) + " / " + canvas.pageCount());
-        refreshLayers();
+        if (layerPopup != null && layerPopup.isShowing()) refreshLayers();
+        if (pagePanel != null) pagePanel.onPageChanged();
         updateHistory();
     }
 
     @Override
     public void onSelectionChanged(boolean has) {
         selBar.setVisibility(has ? View.VISIBLE : View.GONE);
+        if (editTextBtn != null) editTextBtn.setVisibility(canvas.singleSelectedText() != null ? View.VISIBLE : View.GONE);
     }
 
     @Override
@@ -1140,21 +1068,28 @@ public class EditorActivity extends Activity implements CanvasView.Listener {
 
     @Override
     public void onTextRequest(float x, float y, TextElem existing) {
-        Dialogs.input(this, existing == null ? "텍스트 입력" : "텍스트 수정 (비우면 삭제)",
-                existing == null ? "" : existing.text, true, s -> canvas.commitText(x, y, existing, s));
+        TextElem.Style base = existing != null ? existing.style : canvas.textStyle;
+        TextTools.edit(this, existing == null ? "" : existing.text, base, existing != null, (text, st) -> {
+            if (existing == null) {
+                canvas.textStyle = st.copy();
+                saveToolPrefs();
+            }
+            canvas.commitText(x, y, existing, text, st);
+        });
     }
 
     @Override
     public void onZoomChanged(float scale) {
         if (zoomLabel == null) return;
-        float base = meta.infinite ? 1f : (canvas.getWidth() - 32 * getResources().getDisplayMetrics().density) / canvas.page().w;
-        zoomLabel.setText(Math.round(scale / base * 100) + "%");
+        zoomLabel.setText(Math.round(scale / canvas.baseScale() * 100) + "%");
     }
 
     @Override
     public void onDocChanged() {
         dirty = true;
         if (layerPopup != null && layerPopup.isShowing()) refreshLayers();
+        if (pagePanel != null) pagePanel.invalidatePage(canvas.page());
+        if (pageLabel != null) pageLabel.setText((canvas.pageIndex() + 1) + " / " + canvas.pageCount());
     }
 
     @Override

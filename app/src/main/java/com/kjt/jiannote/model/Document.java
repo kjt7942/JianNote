@@ -13,7 +13,7 @@ import java.util.ArrayList;
 /** 노트북 하나의 전체 내용 (페이지 → 레이어 → 요소). 바이너리로 저장. */
 public class Document {
     private static final int MAGIC = 0x494E4B53; // INKS
-    private static final int VERSION = 1;
+    private static final int VERSION = 2;
 
     public ArrayList<Page> pages = new ArrayList<>();
 
@@ -27,6 +27,7 @@ public class Document {
                 o.writeFloat(p.w);
                 o.writeFloat(p.h);
                 o.writeInt(p.template);
+                o.writeBoolean(p.bookmarked);
                 o.writeInt(p.layers.size());
                 for (Layer l : p.layers) {
                     o.writeUTF(l.name);
@@ -45,10 +46,11 @@ public class Document {
         Document d = new Document();
         try (DataInputStream in = new DataInputStream(new BufferedInputStream(new FileInputStream(f), 1 << 16))) {
             if (in.readInt() != MAGIC) throw new IOException("not an InkShelf file");
-            in.readInt(); // version
+            int ver = in.readInt();
             int pc = in.readInt();
             for (int i = 0; i < pc; i++) {
                 Page p = new Page(in.readFloat(), in.readFloat(), in.readInt());
+                if (ver >= 2) p.bookmarked = in.readBoolean();
                 int lc = in.readInt();
                 for (int j = 0; j < lc; j++) {
                     Layer l = new Layer(in.readUTF());
@@ -59,7 +61,8 @@ public class Document {
                         byte t = in.readByte();
                         switch (t) {
                             case Element.T_STROKE: l.elems.add(StrokeElem.read(in)); break;
-                            case Element.T_TEXT: l.elems.add(TextElem.read(in)); break;
+                            case Element.T_TEXT: l.elems.add(TextElem.readV1(in)); break;
+                            case Element.T_TEXT2: l.elems.add(TextElem.read(in)); break;
                             case Element.T_IMAGE: l.elems.add(ImageElem.read(in)); break;
                             default: throw new IOException("unknown element " + t);
                         }

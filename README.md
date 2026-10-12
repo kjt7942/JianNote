@@ -1,4 +1,4 @@
-# JianNotePremium
+# JianNote
 
 갤럭시탭(S7 FE 등) S펜용 손글씨 노트 앱 — Noteshelf 3 / GoodNotes 스타일.
 

@@ -44,6 +44,7 @@ public class LibraryActivity extends Activity {
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
+        com.kjt.jiannote.render.Fonts.init(getAssets());
         store = new Store(this);
         premium = new Premium(this);
 
@@ -288,7 +289,7 @@ public class LibraryActivity extends Activity {
                         } catch (Exception ignored) {
                         }
                         new AlertDialog.Builder(this)
-                                .setTitle("JianNote Premium")
+                                .setTitle("JianNote")
                                 .setMessage("버전 " + ver + "\n\nS펜 필압 · 레이어 · 무한 캔버스를 지원하는 손글씨 노트 앱\n\n" +
                                         "• S펜: 필기 / 측면 버튼 누르고 쓰면 지우개\n" +
                                         "• 손가락: 한 손가락 이동, 두 손가락 확대/축소\n" +

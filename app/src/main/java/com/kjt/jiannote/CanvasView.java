@@ -3,7 +3,6 @@ package com.kjt.jiannote;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
-import android.graphics.Color;
 import android.graphics.DashPathEffect;
 import android.graphics.Matrix;
 import android.graphics.Paint;
@@ -13,7 +12,10 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.view.MotionEvent;
+import android.view.VelocityTracker;
 import android.view.View;
+import android.view.ViewConfiguration;
+import android.widget.OverScroller;
 
 import com.kjt.jiannote.model.Document;
 import com.kjt.jiannote.model.Element;
@@ -29,10 +31,11 @@ import java.util.ArrayList;
 import java.util.HashSet;
 
 /**
- * 필기 캔버스.
+ * 필기 캔버스. 일반 노트는 모든 페이지가 세로로 이어진 스크롤 방식.
  * - S펜(스타일러스): 필기 / 측면 버튼 누르고 쓰면 지우개
- * - 손가락: 이동·확대(두 손가락), 손가락 필기 옵션
+ * - 손가락: 스크롤(관성), 두 손가락 확대/축소, 손가락 필기 옵션
  * - 펜이 화면 근처(호버)에 있을 때 손바닥 터치 무시
+ * 요소 좌표는 각 페이지 기준(로컬), 화면 좌표 = (로컬 + 페이지오프셋) * scale + t
  */
 public class CanvasView extends View {
 
@@ -58,15 +61,21 @@ public class CanvasView extends View {
     private static final int M_NONE = 0, M_DRAW = 1, M_GESTURE = 2, M_IGNORE = 3, M_PALM = 4;
     private static final int IN_NONE = 0, IN_STROKE = 1, IN_ERASE = 2, IN_LASSO = 3, IN_MOVE = 4,
             IN_SCALE = 5, IN_SHAPE = 6, IN_TAP = 7;
+    private static final float GAP = 48f;
 
     // ---- 문서 상태
     private Document doc;
     private RenderContext rc;
-    private int paperColor = Color.WHITE;
+    private int paperColor = 0xFFFFFFFF;
     private int pageIndex = 0;
     private int activeLayer = 0;
     private Listener listener;
     public final UndoManager undo = new UndoManager();
+
+    // 페이지 배치 (세로 스크롤)
+    private float[] pageTop = new float[0];
+    private float[] pageLeft = new float[0];
+    private float maxPageW = 1, totalH = 1;
 
     // ---- 도구 설정
     public int tool = TOOL_PEN;
@@ -78,19 +87,20 @@ public class CanvasView extends View {
     public float eraserSize = 24f;
     public boolean eraserPartial = true;
     public int shapeType = ShapeRecognizer.RECT;
-    public float textSize = 40f;
+    public TextElem.Style textStyle = new TextElem.Style();
     public boolean fingerDraw = false;
     public boolean pressureEnabled = true;
     public float pressureGamma = 1.0f;
     public boolean holdToShape = true;
 
-    // ---- 변환 (screen = world * scale + t)
+    // ---- 변환
     private float scale = 1f, tx = 0f, ty = 0f;
 
     // ---- 장면 캐시
     private Bitmap scene;
     private boolean sceneDirty = true;
     private float sceneScale = 1f, sceneTx = 0f, sceneTy = 0f;
+    private long lastRenderMs = 0;
     private final Matrix tmpMatrix = new Matrix();
     private final Paint bitmapPaint = new Paint(Paint.FILTER_BITMAP_FLAG);
 
@@ -131,13 +141,14 @@ public class CanvasView extends View {
     // 도형
     private float shapeX0, shapeY0;
 
-    // 제스처
+    // 제스처 / 관성 스크롤
     private boolean gestureActive;
+    private boolean pinching, pinchedThisGesture;
     private float gLastCx, gLastCy, gLastDist;
     private int gMaxPointers;
-    private float gTotalDx, gTotalDy;
-    private float gStartScale;
-    private long gStartTime;
+    private VelocityTracker velocity;
+    private final OverScroller scroller;
+    private final int minFling, maxFling;
 
     // 페인트
     private final Paint deskPaint = new Paint();
@@ -152,8 +163,12 @@ public class CanvasView extends View {
     public CanvasView(Context c) {
         super(c);
         density = getResources().getDisplayMetrics().density;
-        deskPaint.setColor(0xFFE9E6DF);
-        shadowPaint.setColor(0x22000000);
+        scroller = new OverScroller(c);
+        ViewConfiguration vc = ViewConfiguration.get(c);
+        minFling = vc.getScaledMinimumFlingVelocity();
+        maxFling = vc.getScaledMaximumFlingVelocity();
+        deskPaint.setColor(0xFFD3D3CE);
+        shadowPaint.setColor(0x1F000000);
         lassoPaint.setStyle(Paint.Style.STROKE);
         lassoPaint.setColor(0xFF3D5AFE);
         lassoPaint.setStrokeWidth(2 * density);
@@ -182,6 +197,7 @@ public class CanvasView extends View {
         undo.clear();
         pageIndex = 0;
         activeLayer = d.pages.get(0).layers.size() - 1;
+        relayout();
         post(this::fitPage);
     }
 
@@ -194,6 +210,8 @@ public class CanvasView extends View {
     public Page page() { return doc.pages.get(pageIndex); }
 
     public int activeLayerIndex() { return activeLayer; }
+
+    public boolean isInfinite() { return doc != null && doc.pages.get(0).isInfinite(); }
 
     public Layer activeLayer() {
         Page p = page();
@@ -209,18 +227,84 @@ public class CanvasView extends View {
 
     public float getScale() { return scale; }
 
+    /** 100% 기준 배율 (화면 너비 맞춤) */
+    public float baseScale() {
+        if (isInfinite() || getWidth() == 0) return 1f;
+        return (getWidth() - 32 * density) / maxPageW;
+    }
+
     public void setPaperColor(int c) {
         paperColor = c;
         invalidateScene();
+    }
+
+    /** 페이지 배치 다시 계산 */
+    public void relayout() {
+        if (doc == null) return;
+        int n = doc.pages.size();
+        pageTop = new float[n];
+        pageLeft = new float[n];
+        if (isInfinite()) {
+            maxPageW = 1;
+            totalH = 1;
+            return;
+        }
+        maxPageW = 1;
+        for (Page p : doc.pages) maxPageW = Math.max(maxPageW, p.w);
+        float y = 0;
+        for (int i = 0; i < n; i++) {
+            Page p = doc.pages.get(i);
+            pageTop[i] = y;
+            pageLeft[i] = (maxPageW - p.w) / 2f;
+            y += p.h + GAP;
+        }
+        totalH = y - GAP;
+    }
+
+    private float ox() { return pageIndex < pageLeft.length ? pageLeft[pageIndex] : 0; }
+
+    private float oy() { return pageIndex < pageTop.length ? pageTop[pageIndex] : 0; }
+
+    private int pageAtWorldY(float gy) {
+        if (isInfinite()) return 0;
+        for (int i = 0; i < doc.pages.size(); i++) {
+            if (gy < pageTop[i] + doc.pages.get(i).h + GAP / 2f) return i;
+        }
+        return doc.pages.size() - 1;
+    }
+
+    private void setCurrentPage(int i) {
+        if (i == pageIndex) return;
+        clearSelection();
+        pageIndex = i;
+        activeLayer = Math.min(activeLayer, page().layers.size() - 1);
+        if (listener != null) listener.onPageChanged();
+    }
+
+    private void switchToPageAt(float sx, float sy) {
+        if (isInfinite()) return;
+        setCurrentPage(pageAtWorldY((sy - ty) / scale));
+    }
+
+    /** 화면 중앙에 있는 페이지를 현재 페이지로 */
+    private void updatePageFromViewport() {
+        if (isInfinite() || inputKind != IN_NONE || !selection.isEmpty() || getHeight() == 0) return;
+        int i = pageAtWorldY((getHeight() / 3f - ty) / scale);
+        setCurrentPage(i);
     }
 
     public void goToPage(int i) {
         if (doc == null) return;
         i = Math.max(0, Math.min(i, doc.pages.size() - 1));
         clearSelection();
+        scroller.forceFinished(true);
         pageIndex = i;
-        activeLayer = page().layers.size() - 1;
-        fitPage();
+        activeLayer = Math.min(activeLayer, page().layers.size() - 1);
+        if (!isInfinite()) {
+            ty = 16 * density - pageTop[i] * scale;
+            clampTransform();
+        }
+        invalidateScene();
         if (listener != null) listener.onPageChanged();
     }
 
@@ -231,20 +315,17 @@ public class CanvasView extends View {
 
     public void fitPage() {
         if (doc == null || getWidth() == 0) return;
-        Page p = page();
-        if (p.isInfinite()) {
-            if (scale <= 0) scale = 1;
+        if (isInfinite()) {
             if (tx == 0 && ty == 0) {
                 scale = 1;
                 tx = 40 * density;
                 ty = 40 * density;
             }
         } else {
-            float margin = 16 * density;
-            scale = (getWidth() - 2 * margin) / p.w;
-            tx = (getWidth() - p.w * scale) / 2f;
-            ty = margin;
-            if (p.h * scale < getHeight()) ty = Math.max(margin, (getHeight() - p.h * scale) / 2f);
+            scale = baseScale();
+            tx = (getWidth() - maxPageW * scale) / 2f;
+            ty = 16 * density - oy() * scale;
+            clampTransform();
         }
         if (listener != null) listener.onZoomChanged(scale);
         invalidateScene();
@@ -258,29 +339,19 @@ public class CanvasView extends View {
         invalidateScene();
     }
 
-    private float fitScale() {
-        Page p = page();
-        if (p.isInfinite()) return 1f;
-        return (getWidth() - 32 * density) / p.w;
-    }
-
     public void undo() {
         clearSelection();
-        UndoManager.Cmd c = undo.undo();
-        afterHistory(c);
+        afterHistory(undo.undo());
     }
 
     public void redo() {
         clearSelection();
-        UndoManager.Cmd c = undo.redo();
-        afterHistory(c);
+        afterHistory(undo.redo());
     }
 
     private void afterHistory(UndoManager.Cmd c) {
         if (c != null && c.page() >= 0 && c.page() != pageIndex && c.page() < doc.pages.size()) {
-            pageIndex = c.page();
-            fitPage();
-            if (listener != null) listener.onPageChanged();
+            goToPage(c.page());
         }
         activeLayer = Math.min(activeLayer, page().layers.size() - 1);
         changed();
@@ -364,6 +435,7 @@ public class CanvasView extends View {
     // ---- 페이지 조작 (되돌리기 기록 초기화)
     public void addPage(Page p, int at) {
         doc.pages.add(at, p);
+        relayout();
         undo.clear();
         goToPage(at);
         changed();
@@ -372,7 +444,9 @@ public class CanvasView extends View {
     public void deletePage(int i) {
         if (doc.pages.size() <= 1) return;
         doc.pages.remove(i);
+        relayout();
         undo.clear();
+        pageIndex = Math.min(pageIndex, doc.pages.size() - 1);
         goToPage(Math.min(i, doc.pages.size() - 1));
         changed();
     }
@@ -381,13 +455,20 @@ public class CanvasView extends View {
         if (to < 0 || to >= doc.pages.size()) return;
         Page p = doc.pages.remove(from);
         doc.pages.add(to, p);
+        relayout();
         undo.clear();
         goToPage(to);
         changed();
     }
 
+    public void pagesChanged() {
+        relayout();
+        clampTransform();
+        changed();
+    }
+
     // ---- 텍스트/이미지
-    public void commitText(float x, float y, TextElem existing, String text) {
+    public void commitText(float x, float y, TextElem existing, String text, TextElem.Style style) {
         Layer l = activeLayer();
         ArrayList<Element> before = new ArrayList<>(l.elems);
         int idx = existing == null ? -1 : l.elems.indexOf(existing);
@@ -395,12 +476,26 @@ public class CanvasView extends View {
             if (idx >= 0) l.elems.remove(idx);
             else return;
         } else if (idx >= 0) {
-            l.elems.set(idx, new TextElem(existing.x, existing.y, text, existing.size, existing.color, existing.maxWidth));
+            l.elems.set(idx, existing.withText(text, style));
         } else {
-            l.elems.add(new TextElem(x, y, text, textSize, penColor, 0));
+            l.elems.add(new TextElem(x, y, text, style, 0));
         }
         pushElems(l, before);
         changed();
+    }
+
+    /** 선택된 것이 텍스트 하나뿐이면 반환 */
+    public TextElem singleSelectedText() {
+        if (selection.size() == 1 && selection.get(0) instanceof TextElem) return (TextElem) selection.get(0);
+        return null;
+    }
+
+    public void editSelectedText(TextElem old, String text, TextElem.Style st) {
+        if (text == null || text.trim().isEmpty()) {
+            deleteSelection();
+            return;
+        }
+        replaceSelection(e -> e == old ? old.withText(text, st) : e);
     }
 
     public void addImage(String file, int bw, int bh) {
@@ -412,6 +507,11 @@ public class CanvasView extends View {
             w = h * bw / Math.max(1, bh);
         }
         float x = vis.centerX() - w / 2, y = vis.centerY() - h / 2;
+        if (!isInfinite()) {
+            Page p = page();
+            x = Math.max(0, Math.min(x, p.w - w));
+            y = Math.max(0, Math.min(y, p.h - h));
+        }
         ImageElem e = new ImageElem(file, x, y, w, h);
         Layer l = activeLayer();
         ArrayList<Element> before = new ArrayList<>(l.elems);
@@ -484,7 +584,6 @@ public class CanvasView extends View {
         replaceSelection(e -> e.withColor(color));
     }
 
-    /** 선택 영역을 다른 레이어로 이동 */
     public void moveSelectionToLayer(int target) {
         if (selection.isEmpty()) return;
         Page p = page();
@@ -522,11 +621,15 @@ public class CanvasView extends View {
         select(newSel);
     }
 
-    // ================= 좌표 =================
+    // ================= 좌표 (현재 페이지 기준) =================
 
-    private float wx(float sx) { return (sx - tx) / scale; }
+    private float wx(float sx) { return (sx - tx) / scale - ox(); }
 
-    private float wy(float sy) { return (sy - ty) / scale; }
+    private float wy(float sy) { return (sy - ty) / scale - oy(); }
+
+    private float sxOf(float lx) { return (lx + ox()) * scale + tx; }
+
+    private float syOf(float ly) { return (ly + oy()) * scale + ty; }
 
     public RectF visibleWorld() {
         return new RectF(wx(0), wy(0), wx(getWidth()), wy(getHeight()));
@@ -540,36 +643,53 @@ public class CanvasView extends View {
         if (w <= 0 || h <= 0) return;
         if (scene != null) scene.recycle();
         scene = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
-        if (doc != null) {
-            if (ow == 0 || !page().isInfinite()) fitPage();
-        }
+        if (doc != null && (ow == 0 || !isInfinite())) fitPage();
         sceneDirty = true;
     }
 
     private void renderScene() {
         if (scene == null || doc == null) return;
+        long t0 = SystemClock.uptimeMillis();
         Canvas c = new Canvas(scene);
-        c.drawRect(0, 0, scene.getWidth(), scene.getHeight(), deskPaint);
-        Page p = page();
-        if (!p.isInfinite()) {
-            float sh = 4 * density;
-            c.drawRect(tx + sh, ty + sh, tx + p.w * scale + sh, ty + p.h * scale + sh, shadowPaint);
+        int W = scene.getWidth(), H = scene.getHeight();
+        c.drawRect(0, 0, W, H, deskPaint);
+        if (isInfinite()) {
+            c.save();
+            c.translate(tx, ty);
+            c.scale(scale, scale);
+            RectF vis = new RectF(-tx / scale, -ty / scale, (W - tx) / scale, (H - ty) / scale);
+            Renderer.drawPage(c, doc.pages.get(0), paperColor, rc, vis, scale, excluded);
+            c.restore();
+        } else {
+            float gTop = -ty / scale, gBot = (H - ty) / scale;
+            float gLeft = -tx / scale, gRight = (W - tx) / scale;
+            float sh = 3 * density;
+            for (int i = 0; i < doc.pages.size(); i++) {
+                Page p = doc.pages.get(i);
+                float top = pageTop[i], left = pageLeft[i];
+                if (top > gBot || top + p.h < gTop) continue;
+                float sl = tx + left * scale, st = ty + top * scale;
+                c.drawRect(sl + sh, st + sh, sl + p.w * scale + sh, st + p.h * scale + sh, shadowPaint);
+                c.save();
+                c.translate(tx, ty);
+                c.scale(scale, scale);
+                c.translate(left, top);
+                RectF vis = new RectF(gLeft - left, gTop - top, gRight - left, gBot - top);
+                Renderer.drawPage(c, p, paperColor, rc, vis, scale, i == pageIndex ? excluded : null);
+                c.restore();
+            }
         }
-        c.save();
-        c.translate(tx, ty);
-        c.scale(scale, scale);
-        Renderer.drawPage(c, p, paperColor, rc, visibleWorld(), scale, excluded);
-        c.restore();
         sceneScale = scale;
         sceneTx = tx;
         sceneTy = ty;
         sceneDirty = false;
+        lastRenderMs = SystemClock.uptimeMillis() - t0;
     }
 
     @Override
     protected void onDraw(Canvas canvas) {
         if (doc == null || scene == null) return;
-        if (sceneDirty && !gestureActive) renderScene();
+        if (sceneDirty && (!gestureActive || (!pinching && lastRenderMs < 28))) renderScene();
         boolean same = sceneScale == scale && sceneTx == tx && sceneTy == ty;
         if (same) {
             canvas.drawBitmap(scene, 0, 0, null);
@@ -584,34 +704,31 @@ public class CanvasView extends View {
         canvas.save();
         canvas.translate(tx, ty);
         canvas.scale(scale, scale);
+        canvas.translate(ox(), oy());
         Page p = page();
         if (!p.isInfinite()) canvas.clipRect(0, 0, p.w, p.h);
         if (current != null) current.draw(canvas, rc);
-        // 선택된 요소 (이동/확대 미리보기 포함)
         if (!selection.isEmpty()) {
             ArrayList<Element> list = selPreview != null ? selPreview : selection;
             for (Element e : list) e.draw(canvas, rc);
         }
         canvas.restore();
 
-        // 올가미
         if (inputKind == IN_LASSO && !lassoPts.isEmpty()) {
             lassoPath.reset();
             for (int i = 0; i < lassoPts.size(); i++) {
                 float[] q = lassoPts.get(i);
-                float sx = q[0] * scale + tx, sy = q[1] * scale + ty;
+                float sx = sxOf(q[0]), sy = syOf(q[1]);
                 if (i == 0) lassoPath.moveTo(sx, sy);
                 else lassoPath.lineTo(sx, sy);
             }
             canvas.drawPath(lassoPath, lassoPaint);
         }
-        // 선택 상자
         if (selBounds != null) {
             RectF b = screenSelBounds();
             canvas.drawRect(b, selPaint);
             canvas.drawCircle(b.right, b.bottom, 9 * density, handlePaint);
         }
-        // 지우개 커서
         if ((tool == TOOL_ERASER || inputKind == IN_ERASE) && eraserSx >= 0) {
             canvas.drawCircle(eraserSx, eraserSy, eraserSize / 2f, cursorPaint);
         }
@@ -620,14 +737,25 @@ public class CanvasView extends View {
     private RectF screenSelBounds() {
         RectF b = new RectF(selBounds);
         if (selPreview != null) {
-            b.left = (b.left - selBounds.left) * previewScale + selBounds.left + previewDx;
-            b.top = (b.top - selBounds.top) * previewScale + selBounds.top + previewDy;
+            b.left = selBounds.left + previewDx;
+            b.top = selBounds.top + previewDy;
             b.right = (selBounds.right - selBounds.left) * previewScale + selBounds.left + previewDx;
             b.bottom = (selBounds.bottom - selBounds.top) * previewScale + selBounds.top + previewDy;
         }
-        RectF s = new RectF(b.left * scale + tx, b.top * scale + ty, b.right * scale + tx, b.bottom * scale + ty);
+        RectF s = new RectF(sxOf(b.left), syOf(b.top), sxOf(b.right), syOf(b.bottom));
         s.inset(-6 * density, -6 * density);
         return s;
+    }
+
+    @Override
+    public void computeScroll() {
+        if (scroller.computeScrollOffset()) {
+            tx = scroller.getCurrX();
+            ty = scroller.getCurrY();
+            sceneDirty = true;
+            updatePageFromViewport();
+            postInvalidateOnAnimation();
+        }
     }
 
     // ================= 입력 =================
@@ -659,6 +787,15 @@ public class CanvasView extends View {
     public boolean onTouchEvent(MotionEvent e) {
         if (doc == null) return false;
         int action = e.getActionMasked();
+        if (action == MotionEvent.ACTION_DOWN) {
+            if (velocity != null) velocity.recycle();
+            velocity = VelocityTracker.obtain();
+            if (!scroller.isFinished()) {
+                scroller.forceFinished(true);
+                sceneDirty = true;
+            }
+        }
+        if (velocity != null) velocity.addMovement(e);
         switch (action) {
             case MotionEvent.ACTION_DOWN: {
                 requestUnbufferedDispatch(e);
@@ -689,7 +826,6 @@ public class CanvasView extends View {
             case MotionEvent.ACTION_POINTER_DOWN: {
                 int ai = e.getActionIndex();
                 if (isStylus(e, ai) && mode != M_DRAW && tool != TOOL_HAND) {
-                    // 손바닥이 먼저 닿은 뒤 펜이 들어온 경우
                     if (gestureActive) endGesture(false);
                     mode = M_DRAW;
                     drawPointerId = e.getPointerId(ai);
@@ -740,7 +876,7 @@ public class CanvasView extends View {
                     endInput(e, Math.max(idx, 0));
                 } else if (mode == M_GESTURE) {
                     boolean tap = !movedFar && e.getEventTime() - downTime < 300 && gMaxPointers == 1;
-                    endGesture(true);
+                    endGesture(!tap);
                     if (tap) fingerTap(e.getX(), e.getY());
                 }
                 mode = M_NONE;
@@ -758,9 +894,9 @@ public class CanvasView extends View {
         return true;
     }
 
-    /** 손가락 탭: 텍스트 도구면 텍스트 추가, 선택 중이면 해제 */
     private void fingerTap(float sx, float sy) {
         if (tool == TOOL_TEXT) {
+            switchToPageAt(sx, sy);
             textTap(wx(sx), wy(sy));
         } else if (hasSelection()) {
             RectF b = screenSelBounds();
@@ -783,10 +919,16 @@ public class CanvasView extends View {
 
     private void beginInput(MotionEvent e, int idx, boolean erase) {
         float sx = e.getX(idx), sy = e.getY(idx);
+        int t = erase ? TOOL_ERASER : tool;
+        boolean onSelection = false;
+        if (t == TOOL_LASSO && selBounds != null) {
+            RectF b = screenSelBounds();
+            onSelection = b.contains(sx, sy) || Math.hypot(sx - b.right, sy - b.bottom) < 28 * density;
+        }
+        if (!onSelection) switchToPageAt(sx, sy);
         float x = wx(sx), y = wy(sy);
         lastSx = sx;
         lastSy = sy;
-        int t = erase ? TOOL_ERASER : tool;
         if (t != TOOL_LASSO && t != TOOL_TEXT && t != TOOL_ERASER) clearSelection();
         switch (t) {
             case TOOL_PEN: {
@@ -913,8 +1055,7 @@ public class CanvasView extends View {
                 break;
             }
             case IN_SHAPE: {
-                float x = wx(sx), y = wy(sy);
-                current = ShapeRecognizer.build(shapeType, shapeX0, shapeY0, x, y, penColor, penWidth);
+                current = ShapeRecognizer.build(shapeType, shapeX0, shapeY0, wx(sx), wy(sy), penColor, penWidth);
                 invalidate();
                 break;
             }
@@ -932,7 +1073,7 @@ public class CanvasView extends View {
             w = hlWidth;
         } else {
             float target = widthFor(pressure, drawIsStylus);
-            w = lastWidth * 0.55f + target * 0.45f; // 필압 떨림 완화
+            w = lastWidth * 0.55f + target * 0.45f;
             lastWidth = w;
         }
         current.add(wx(sx), wy(sy), w);
@@ -942,9 +1083,7 @@ public class CanvasView extends View {
         handler.removeCallbacks(holdRunnable);
         switch (inputKind) {
             case IN_STROKE: {
-                if (current != null && current.n > 0) {
-                    commitElement(current);
-                }
+                if (current != null && current.n > 0) commitElement(current);
                 current = null;
                 break;
             }
@@ -967,8 +1106,6 @@ public class CanvasView extends View {
                     final float px = selBounds.left, py = selBounds.top;
                     selPreview = null;
                     replaceSelection(el -> el.transformed(dx, dy, s, px, py));
-                } else if (!movedFar && inputKind == IN_MOVE) {
-                    // 선택 영역 탭: 그대로 유지
                 }
                 selPreview = null;
                 previewDx = previewDy = 0;
@@ -1012,7 +1149,6 @@ public class CanvasView extends View {
         ArrayList<Element> before = new ArrayList<>(l.elems);
         l.elems.add(el);
         pushElems(l, before);
-        // 빠른 경로: 맨 위 레이어면 장면 비트맵에 바로 그리기
         boolean top = true;
         Page p = page();
         for (int i = activeLayer + 1; i < p.layers.size(); i++) {
@@ -1023,6 +1159,7 @@ public class CanvasView extends View {
             Canvas c = new Canvas(scene);
             c.translate(tx, ty);
             c.scale(scale, scale);
+            c.translate(ox(), oy());
             if (!p.isInfinite()) c.clipRect(0, 0, p.w, p.h);
             el.draw(c, rc);
         } else {
@@ -1086,7 +1223,6 @@ public class CanvasView extends View {
                     hit = e.hit(x, y, r);
                 }
             } else {
-                // 텍스트/이미지는 획 지우개 모드에서만 지운다
                 hit = !eraserPartial && e.hit(x, y, 0);
             }
             if (hit) {
@@ -1162,7 +1298,7 @@ public class CanvasView extends View {
         if (listener != null) listener.onTextRequest(x, y, hitText);
     }
 
-    // ---------- 제스처 (이동/확대) ----------
+    // ---------- 제스처 (스크롤/확대) ----------
 
     private void startGesture(MotionEvent e, int skip) {
         float cx = 0, cy = 0;
@@ -1185,13 +1321,11 @@ public class CanvasView extends View {
         if (!gestureActive) {
             gestureActive = true;
             gMaxPointers = cnt;
-            gTotalDx = 0;
-            gTotalDy = 0;
-            gStartScale = scale;
-            gStartTime = e.getEventTime();
+            pinchedThisGesture = false;
         } else {
             gMaxPointers = Math.max(gMaxPointers, cnt);
         }
+        pinching = cnt >= 2;
     }
 
     private void moveGesture(MotionEvent e) {
@@ -1207,8 +1341,6 @@ public class CanvasView extends View {
         if (Math.hypot(cx - downSx, cy - downSy) > 12 * density) movedFar = true;
         tx += dx;
         ty += dy;
-        gTotalDx += dx;
-        gTotalDy += dy;
         if (cnt >= 2) {
             float dist = (float) Math.hypot(e.getX(0) - e.getX(1), e.getY(0) - e.getY(1));
             if (gLastDist > 0 && dist > 0) {
@@ -1219,57 +1351,83 @@ public class CanvasView extends View {
                 scale = ns;
             }
             gLastDist = dist;
+            pinching = true;
+            pinchedThisGesture = true;
+        } else {
+            pinching = false;
+            softClamp();
         }
         gLastCx = cx;
         gLastCy = cy;
+        sceneDirty = true;
+        updatePageFromViewport();
         invalidate();
         if (listener != null) listener.onZoomChanged(scale);
     }
 
     private float clampScale(float s) {
-        Page p = page();
-        if (p.isInfinite()) return Math.max(0.08f, Math.min(8f, s));
-        float fit = fitScale();
+        if (isInfinite()) return Math.max(0.08f, Math.min(8f, s));
+        float fit = baseScale();
         return Math.max(fit * 0.4f, Math.min(fit * 8f, s));
     }
 
-    private void endGesture(boolean allowFlip) {
+    private void endGesture(boolean allowFling) {
         gestureActive = false;
-        Page p = page();
-        if (allowFlip && !p.isInfinite() && gMaxPointers == 1) {
-            float fit = fitScale();
-            boolean atFit = scale <= fit * 1.05f;
-            boolean fast = gestureDuration() < 500;
-            if (atFit && Math.abs(gTotalDx) > getWidth() * 0.18f && Math.abs(gTotalDx) > Math.abs(gTotalDy) * 1.5f && fast) {
-                int dir = gTotalDx < 0 ? 1 : -1;
-                int target = pageIndex + dir;
-                if (target >= 0 && target < doc.pages.size()) {
-                    goToPage(target);
-                    return;
-                }
+        pinching = false;
+        boolean flung = false;
+        if (allowFling && !pinchedThisGesture && velocity != null) {
+            velocity.computeCurrentVelocity(1000, maxFling);
+            float vx = velocity.getXVelocity(), vy = velocity.getYVelocity();
+            if (Math.hypot(vx, vy) > minFling * 2) {
+                int[] b = bounds();
+                scroller.fling(Math.round(tx), Math.round(ty), Math.round(vx), Math.round(vy), b[0], b[1], b[2], b[3]);
+                flung = true;
+                postInvalidateOnAnimation();
             }
         }
-        clampTransform();
+        if (!flung) clampTransform();
         sceneDirty = true;
+        updatePageFromViewport();
         invalidate();
     }
 
-    private long gestureDuration() {
-        return SystemClock.uptimeMillis() - gStartTime;
+    /** {minX, maxX, minY, maxY} 이동 가능 범위 */
+    private int[] bounds() {
+        if (isInfinite()) return new int[]{-100000000, 100000000, -100000000, 100000000};
+        float m = 24 * density;
+        float pw = maxPageW * scale, ph = totalH * scale;
+        int minX, maxX, minY, maxY;
+        if (pw <= getWidth()) {
+            minX = maxX = Math.round((getWidth() - pw) / 2f);
+        } else {
+            minX = Math.round(getWidth() - pw - m);
+            maxX = Math.round(m);
+        }
+        if (ph + 2 * m <= getHeight()) {
+            minY = maxY = Math.round(m);
+        } else {
+            minY = Math.round(getHeight() - ph - m);
+            maxY = Math.round(m);
+        }
+        return new int[]{minX, maxX, minY, maxY};
+    }
+
+    /** 끌기 중에는 범위 밖으로 조금만 넘어가게 */
+    private void softClamp() {
+        if (isInfinite()) return;
+        int[] b = bounds();
+        float over = 80 * density;
+        tx = Math.max(b[0] - over, Math.min(b[1] + over, tx));
+        ty = Math.max(b[2] - over, Math.min(b[3] + over, ty));
     }
 
     private void clampTransform() {
-        Page p = page();
-        if (p.isInfinite()) return;
-        float pw = p.w * scale, ph = p.h * scale;
-        float m = 24 * density;
-        if (pw <= getWidth()) tx = (getWidth() - pw) / 2f;
-        else tx = Math.max(getWidth() - pw - m, Math.min(m, tx));
-        if (ph <= getHeight()) ty = Math.max(m * 0.5f, Math.min(ty, getHeight() - ph - m * 0.5f));
-        else ty = Math.max(getHeight() - ph - m, Math.min(m, ty));
+        if (isInfinite()) return;
+        int[] b = bounds();
+        tx = Math.max(b[0], Math.min(b[1], tx));
+        ty = Math.max(b[2], Math.min(b[3], ty));
     }
 
-    /** 무한 캔버스 내보내기용 */
     public RectF contentBounds() {
         return Renderer.contentBounds(page());
     }
