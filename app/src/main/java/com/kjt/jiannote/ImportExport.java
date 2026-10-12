@@ -159,7 +159,7 @@ public class ImportExport {
         for (File f : files) {
             if (f.isDirectory()) {
                 addDir(zip, f, prefix + f.getName() + "/");
-            } else if (!f.getName().endsWith(".tmp")) {
+            } else if (!f.getName().endsWith(".tmp") && !f.getName().endsWith(".bak")) {
                 zip.putNextEntry(new ZipEntry(prefix + f.getName()));
                 try (InputStream in = new FileInputStream(f)) {
                     byte[] buf = new byte[1 << 16];

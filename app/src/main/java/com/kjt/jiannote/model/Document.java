@@ -39,7 +39,12 @@ public class Document {
                 }
             }
         }
-        if (f.exists() && !f.delete()) throw new IOException("delete failed");
+        // 직전 저장본을 .bak 으로 보관해 파일 손상에 대비
+        File bak = new File(f.getPath() + ".bak");
+        if (f.exists()) {
+            if (bak.exists()) bak.delete();
+            if (!f.renameTo(bak)) f.delete();
+        }
         if (!tmp.renameTo(f)) throw new IOException("rename failed");
     }
 

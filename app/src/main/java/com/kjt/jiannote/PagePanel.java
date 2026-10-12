@@ -70,13 +70,14 @@ public class PagePanel extends FrameLayout {
         // 헤더
         LinearLayout head = Ui.row(a);
         head.setPadding(Ui.dp(a, 8), Ui.dp(a, 10), Ui.dp(a, 12), Ui.dp(a, 6));
-        TextView close = Ui.toolButton(a, "✕", null);
+        TextView close = Ui.iconButton(a, R.drawable.ic_close, null);
         close.setOnClickListener(v -> hide());
         head.addView(close);
         TextView title = Ui.label(a, "페이지", 22, Ui.TEXT, true);
         title.setPadding(Ui.dp(a, 6), 0, 0, 0);
         head.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        TextView add = Ui.toolButton(a, "＋", null);
+        TextView add = Ui.iconButton(a, R.drawable.ic_add, null);
+        add.setTooltipText("페이지 추가");
         add.setOnClickListener(v -> {
             Page cur = canvas.page();
             canvas.addPage(Page.create(cur.w, cur.h, cur.template), canvas.pageIndex() + 1);
@@ -244,16 +245,15 @@ public class PagePanel extends FrameLayout {
         nlp.setMargins(Ui.dp(act, 10), 0, 0, Ui.dp(act, 6));
         card.addView(num, nlp);
 
-        TextView ribbon = new TextView(act);
-        ribbon.setText("🔖");
-        ribbon.setTextSize(20);
-        ribbon.setGravity(Gravity.CENTER);
-        ribbon.setAlpha(p.bookmarked ? 1f : 0.25f);
+        ImageView ribbon = new ImageView(act);
+        int rp = Ui.dp(act, 8);
+        ribbon.setPadding(rp, 0, rp, rp);
+        styleRibbon(ribbon, p.bookmarked);
         LayoutParams rlp = new LayoutParams(Ui.dp(act, 40), Ui.dp(act, 40), Gravity.TOP | Gravity.END);
         card.addView(ribbon, rlp);
         ribbon.setOnClickListener(v -> {
             p.bookmarked = !p.bookmarked;
-            ribbon.setAlpha(p.bookmarked ? 1f : 0.25f);
+            styleRibbon(ribbon, p.bookmarked);
             host.onPagesEdited();
             Toast.makeText(act, p.bookmarked ? (i + 1) + "페이지 북마크" : "북마크 해제", Toast.LENGTH_SHORT).show();
             if (bookmarksOnly) rebuild();
@@ -274,6 +274,11 @@ public class PagePanel extends FrameLayout {
         card.setLayoutParams(lp);
         cards.put(i, card);
         return card;
+    }
+
+    private void styleRibbon(ImageView r, boolean on) {
+        r.setImageResource(on ? R.drawable.ic_bookmark_filled : R.drawable.ic_bookmark);
+        r.setImageTintList(android.content.res.ColorStateList.valueOf(on ? 0xFFE53935 : 0x66000000));
     }
 
     private void styleCard(FrameLayout card, boolean current) {

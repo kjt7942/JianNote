@@ -90,7 +90,14 @@ public class Store {
     }
 
     public Document loadDoc(String id) throws IOException {
-        return Document.read(new File(dir(id), "doc.bin"));
+        File f = new File(dir(id), "doc.bin");
+        try {
+            return Document.read(f);
+        } catch (Exception e) {
+            File bak = new File(dir(id), "doc.bin.bak");
+            if (bak.exists()) return Document.read(bak);
+            throw e instanceof IOException ? (IOException) e : new IOException(e);
+        }
     }
 
     public void saveDoc(String id, Document doc) throws IOException {
