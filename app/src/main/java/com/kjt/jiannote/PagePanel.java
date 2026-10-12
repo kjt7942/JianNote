@@ -146,7 +146,9 @@ public class PagePanel extends FrameLayout {
         }
     }
 
-    private final Runnable refreshCurrent = () -> {
+    private final Runnable refreshCurrent = this::refreshCurrentThumb;
+
+    private void refreshCurrentThumb() {
         int i = canvas.pageIndex();
         Page p = canvas.page();
         FrameLayout card = cards.get(i);
@@ -155,7 +157,7 @@ public class PagePanel extends FrameLayout {
             ImageView iv = (ImageView) card.getTag();
             iv.setImageBitmap(b);
         }
-    };
+    }
 
     public void onPageChanged() {
         if (!isOpen()) return;
