@@ -13,8 +13,8 @@ import java.security.MessageDigest;
  * 무료: 노트북 3권, 페이지당 레이어 2개, 기본 속지 4종, PDF 워터마크.
  * 프리미엄: 노트북·레이어 무제한, 프리미엄 속지, 워터마크 없는 PDF.
  *
- * 프리미엄 해제 코드 = SHA-256(SECRET + ":" + 기기코드) 앞 12자리 (XXXX-XXXX-XXXX).
- * tools/keygen.py 로 생성한다. (나중에 Google Play 결제로 교체 가능)
+ * 판매용 구매는 Google Play 결제(Billing)로 처리하고,
+ * 개발자/테스트용 해제 코드 = SHA-256(SECRET + ":" + 기기코드) 앞 12자리 (tools/keygen.py).
  */
 public class Premium {
     public static final int FREE_NOTEBOOKS = 3;
@@ -38,6 +38,11 @@ public class Premium {
     }
 
     public boolean isPremium() {
+        return sp.getBoolean("play", false) || devUnlocked();
+    }
+
+    /** 개발자/테스트용 해제 코드로 활성화된 경우 */
+    public boolean devUnlocked() {
         String c = sp.getString("code", null);
         return c != null && c.equals(expectedCode());
     }

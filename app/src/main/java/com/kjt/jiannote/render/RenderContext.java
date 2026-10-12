@@ -8,7 +8,7 @@ import java.io.File;
 
 public class RenderContext {
     public final File dir;
-    private final LruCache<String, Bitmap> cache = new LruCache<String, Bitmap>(64 * 1024 * 1024) {
+    private final LruCache<String, Bitmap> cache = new LruCache<String, Bitmap>(120 * 1024 * 1024) {
         @Override
         protected int sizeOf(String key, Bitmap value) {
             return value.getByteCount();
@@ -30,7 +30,9 @@ public class RenderContext {
         if (b == null) {
             File f = new File(imagesDir(), name);
             if (!f.exists()) return null;
-            b = BitmapFactory.decodeFile(f.getPath());
+            BitmapFactory.Options o = new BitmapFactory.Options();
+            if (name.endsWith(".jpg")) o.inPreferredConfig = Bitmap.Config.RGB_565;
+            b = BitmapFactory.decodeFile(f.getPath(), o);
             if (b != null) cache.put(name, b);
         }
         return b;

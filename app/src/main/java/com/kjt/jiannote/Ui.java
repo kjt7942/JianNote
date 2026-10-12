@@ -75,10 +75,81 @@ public class Ui {
         return t;
     }
 
+    /** 벡터 아이콘 버튼 (label 이 있으면 아이콘 아래에 작은 글씨) */
+    public static TextView iconButton(Context c, int iconRes, String label) {
+        TextView t = new TextView(c);
+        android.graphics.drawable.Drawable d = c.getDrawable(iconRes).mutate();
+        int sz = dp(c, label == null ? 24 : 22);
+        d.setBounds(0, 0, sz, sz);
+        t.setCompoundDrawables(null, d, null, null);
+        t.setCompoundDrawableTintList(ColorStateList.valueOf(TEXT));
+        if (label != null) {
+            t.setText(label);
+            t.setTextSize(10);
+            t.setCompoundDrawablePadding(dp(c, 1));
+        }
+        t.setGravity(Gravity.CENTER);
+        t.setTextColor(TEXT);
+        t.setMinWidth(dp(c, label == null ? 46 : 54));
+        t.setPadding(dp(c, 6), dp(c, label == null ? 11 : 5), dp(c, 6), dp(c, 3));
+        t.setBackground(ripple(Color.TRANSPARENT, dp(c, 12)));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(c, label == null ? 46 : 50));
+        lp.gravity = Gravity.CENTER_VERTICAL;
+        lp.setMargins(dp(c, 1), 0, dp(c, 1), 0);
+        t.setLayoutParams(lp);
+        return t;
+    }
+
+    public static void tintIcon(TextView t, int color) {
+        t.setCompoundDrawableTintList(ColorStateList.valueOf(color));
+        t.setTextColor(color);
+    }
+
+    /** 아이콘 + 글자 가로 버튼 (메뉴형) */
+    public static TextView iconText(Context c, int iconRes, String text, int color) {
+        TextView t = new TextView(c);
+        android.graphics.drawable.Drawable d = c.getDrawable(iconRes).mutate();
+        int sz = dp(c, 20);
+        d.setBounds(0, 0, sz, sz);
+        t.setCompoundDrawables(d, null, null, null);
+        t.setCompoundDrawableTintList(ColorStateList.valueOf(color));
+        t.setCompoundDrawablePadding(dp(c, 8));
+        t.setText(text);
+        t.setTextSize(14);
+        t.setTextColor(color);
+        t.setGravity(Gravity.CENTER_VERTICAL);
+        t.setPadding(dp(c, 12), dp(c, 8), dp(c, 14), dp(c, 8));
+        t.setBackground(ripple(Color.TRANSPARENT, dp(c, 20)));
+        return t;
+    }
+
     public static void setSelected(View v, boolean sel) {
         Context c = v.getContext();
-        v.setBackground(sel ? ripple(0xFFE3E7FF, dp(c, 10)) : ripple(Color.TRANSPARENT, dp(c, 10)));
-        if (v instanceof TextView) ((TextView) v).setTextColor(sel ? ACCENT : TEXT);
+        v.setBackground(sel ? ripple(0xFFE3E7FF, dp(c, 12)) : ripple(Color.TRANSPARENT, dp(c, 12)));
+        if (v instanceof TextView) {
+            ((TextView) v).setTextColor(sel ? ACCENT : TEXT);
+            ((TextView) v).setCompoundDrawableTintList(ColorStateList.valueOf(sel ? ACCENT : TEXT));
+        }
+    }
+
+    /** 안드로이드 15+ 전체화면(edge-to-edge) 대응: 시스템 바 영역만큼 여백 */
+    public static void edgeToEdge(android.app.Activity a, View root) {
+        if (android.os.Build.VERSION.SDK_INT < 30) return;
+        android.view.Window w = a.getWindow();
+        w.setDecorFitsSystemWindows(false);
+        android.view.WindowInsetsController ic = w.getInsetsController();
+        if (ic != null) {
+            int light = android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                    | android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+            ic.setSystemBarsAppearance(light, light);
+        }
+        root.setOnApplyWindowInsetsListener((v, in) -> {
+            android.graphics.Insets b = in.getInsets(android.view.WindowInsets.Type.systemBars()
+                    | android.view.WindowInsets.Type.displayCutout());
+            v.setPadding(b.left, b.top, b.right, b.bottom);
+            return android.view.WindowInsets.CONSUMED;
+        });
+        root.requestApplyInsets();
     }
 
     public static TextView pill(Context c, String text, boolean primary) {

@@ -64,9 +64,19 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
     private PopupWindow layerPopup;
     private LinearLayout layerList;
 
-    private static final String[][] TOOLS = {
-            {"✒️", "펜"}, {"🖍️", "형광펜"}, {"🧽", "지우개"}, {"➰", "올가미"},
-            {"🔷", "도형"}, {"🔤", "텍스트"}, {"✋", "이동"}
+    private static final int[] TOOL_ICONS = {
+            R.drawable.ic_ink_pen, R.drawable.ic_ink_highlighter, R.drawable.ic_ink_eraser, R.drawable.ic_lasso_select,
+            R.drawable.ic_shapes, R.drawable.ic_text_fields, R.drawable.ic_pan_tool
+    };
+    private static final String[] TOOL_NAMES = {"펜", "형광펜", "지우개", "올가미 선택", "도형", "텍스트", "이동(스크롤)"};
+    private LinearLayout strip;
+    private final android.os.Handler autosave = new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable autosaveTick = new Runnable() {
+        @Override
+        public void run() {
+            if (dirty) save();
+            autosave.postDelayed(this, 30000);
+        }
     };
 
     @Override
@@ -99,6 +109,8 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
         root.setBackgroundColor(Ui.BG);
         root.addView(buildTopBar());
         root.addView(Ui.divider(this, false));
+        root.addView(buildStrip());
+        root.addView(Ui.divider(this, false));
 
         FrameLayout body = new FrameLayout(this);
         body.addView(canvas, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -115,6 +127,11 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
         root.addView(Ui.divider(this, false));
         root.addView(buildBottomBar());
         setContentView(root);
+        Ui.edgeToEdge(this, root);
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                    android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, this::handleBack);
+        }
 
         selectTool(canvas.tool);
         updateHistory();
@@ -123,11 +140,23 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
 
     @Override
     public void onBackPressed() {
+        handleBack();
+    }
+
+    private void handleBack() {
         if (pagePanel != null && pagePanel.isOpen()) {
             pagePanel.hide();
-            return;
+        } else if (canvas != null && canvas.hasSelection()) {
+            canvas.clearSelection();
+        } else {
+            finish();
         }
-        super.onBackPressed();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        autosave.postDelayed(autosaveTick, 30000);
     }
 
     private void loadToolPrefs() {
@@ -179,21 +208,31 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
 
     // =============== 상단 도구 막대 ===============
 
+    private TextView icon(int res, String tip) {
+        TextView t = Ui.iconButton(this, res, null);
+        t.setTooltipText(tip);
+        t.setContentDescription(tip);
+        return t;
+    }
+
     private View buildTopBar() {
         HorizontalScrollView hs = new HorizontalScrollView(this);
         hs.setHorizontalScrollBarEnabled(false);
+        hs.setFillViewport(true);
         hs.setBackgroundColor(Ui.SURFACE);
         LinearLayout bar = Ui.row(this);
         bar.setPadding(Ui.dp(this, 6), Ui.dp(this, 4), Ui.dp(this, 6), Ui.dp(this, 4));
-        hs.addView(bar);
+        hs.addView(bar, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        TextView back = Ui.toolButton(this, "←", null);
+        // 왼쪽: 뒤로 · 제목 · 실행취소/다시실행
+        TextView back = icon(R.drawable.ic_arrow_back, "서재로");
         back.setOnClickListener(v -> finish());
         bar.addView(back);
         TextView title = Ui.label(this, meta.title, 15, Ui.TEXT, true);
-        title.setMaxWidth(Ui.dp(this, 160));
+        title.setMaxWidth(Ui.dp(this, 150));
         title.setSingleLine(true);
-        title.setPadding(Ui.dp(this, 4), 0, Ui.dp(this, 8), 0);
+        title.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        title.setPadding(Ui.dp(this, 4), 0, Ui.dp(this, 6), 0);
         title.setOnClickListener(v -> Dialogs.input(this, "노트 이름", meta.title, false, s -> {
             if (s.trim().isEmpty()) return;
             meta.title = s.trim();
@@ -201,11 +240,17 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
             dirty = true;
         }));
         bar.addView(title);
-        bar.addView(Ui.divider(this, true));
+        undoBtn = icon(R.drawable.ic_undo, "실행취소");
+        undoBtn.setOnClickListener(v -> canvas.undo());
+        bar.addView(undoBtn);
+        redoBtn = icon(R.drawable.ic_redo, "다시실행");
+        redoBtn.setOnClickListener(v -> canvas.redo());
+        bar.addView(redoBtn);
+        bar.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
 
-        // 그리기 도구 (이동 도구는 손가락 버튼 옆에 따로 배치)
-        for (int i = 0; i < TOOLS.length; i++) {
-            TextView t = Ui.toolButton(this, TOOLS[i][0], TOOLS[i][1]);
+        // 가운데: 그리기 도구
+        for (int i = 0; i < TOOL_ICONS.length; i++) {
+            TextView t = icon(TOOL_ICONS[i], TOOL_NAMES[i]);
             final int tool = i;
             t.setOnClickListener(v -> {
                 if (canvas.tool == tool && tool != CanvasView.TOOL_HAND) showToolOptions(v);
@@ -214,45 +259,113 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
             toolBtns[i] = t;
             if (i != CanvasView.TOOL_HAND) bar.addView(t);
         }
-        TextView img = Ui.toolButton(this, "🖼️", "이미지");
+        TextView img = icon(R.drawable.ic_image, "이미지 넣기");
         img.setOnClickListener(v -> pickImage());
         bar.addView(img);
-        bar.addView(Ui.divider(this, true));
+        bar.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
 
-        for (int i = 0; i < 5; i++) {
-            Ui.Swatch s = makeQuick(i, quickColors[i]);
-            quick[i] = s;
-            bar.addView(s, new LinearLayout.LayoutParams(Ui.dp(this, 36), Ui.dp(this, 36)));
-        }
-        widthDot = new Ui.Dot(this, 8, canvas.penColor);
-        widthDot.setOnClickListener(this::showToolOptions);
-        bar.addView(widthDot, new LinearLayout.LayoutParams(Ui.dp(this, 40), Ui.dp(this, 40)));
-        bar.addView(Ui.divider(this, true));
-
-        undoBtn = Ui.toolButton(this, "↶", "실행취소");
-        undoBtn.setOnClickListener(v -> canvas.undo());
-        bar.addView(undoBtn);
-        redoBtn = Ui.toolButton(this, "↷", "다시실행");
-        redoBtn.setOnClickListener(v -> canvas.redo());
-        bar.addView(redoBtn);
-        bar.addView(Ui.divider(this, true));
-
-        layerBtn = Ui.toolButton(this, "📚", "레이어");
+        // 오른쪽: 레이어 · 손가락 · 이동 · 더보기
+        layerBtn = icon(R.drawable.ic_layers, "레이어");
         layerBtn.setOnClickListener(this::showLayers);
         bar.addView(layerBtn);
-        fingerBtn = Ui.toolButton(this, "☝️", "손가락");
+        fingerBtn = icon(R.drawable.ic_touch_app, "손가락으로 그리기");
         fingerBtn.setOnClickListener(v -> {
             canvas.fingerDraw = !canvas.fingerDraw;
             updateFinger();
-            Toast.makeText(this, canvas.fingerDraw ? "손가락 필기 켜짐 (두 손가락으로 이동)" : "S펜으로만 필기 (손가락은 스크롤/확대)", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, canvas.fingerDraw ? "손가락 필기 켜짐 (두 손가락으로 스크롤)" : "S펜으로만 필기 (손가락은 스크롤/확대)", Toast.LENGTH_SHORT).show();
         });
         bar.addView(fingerBtn);
         bar.addView(toolBtns[CanvasView.TOOL_HAND]);
         updateFinger();
-        TextView more = Ui.toolButton(this, "⋯", "더보기");
+        TextView more = icon(R.drawable.ic_more_vert, "더보기");
         more.setOnClickListener(this::showMenu);
         bar.addView(more);
         return hs;
+    }
+
+    /** 도구 아래의 빠른 설정 줄: 즐겨찾는 색 5개 + 굵기 3단계 + 상세 설정 */
+    private View buildStrip() {
+        strip = Ui.row(this);
+        strip.setGravity(Gravity.CENTER);
+        strip.setPadding(Ui.dp(this, 10), Ui.dp(this, 2), Ui.dp(this, 10), Ui.dp(this, 2));
+        LinearLayout wrap = Ui.row(this);
+        wrap.setGravity(Gravity.CENTER);
+        wrap.setBackgroundColor(0xFFFAF9F6);
+        wrap.addView(strip, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, Ui.dp(this, 46)));
+        for (int i = 0; i < 5; i++) quick[i] = makeQuick(i, quickColors[i]);
+        widthDot = new Ui.Dot(this, 8, canvas.penColor);
+        widthDot.setOnClickListener(this::showToolOptions);
+        widthDot.setTooltipText("굵기·색상 상세 설정");
+        return wrap;
+    }
+
+    private static final float[][] WIDTH_PRESETS = {
+            {2, 4, 8}, {16, 26, 44}, {14, 28, 56}, {}, {2, 4, 8}, {28, 40, 64}, {}
+    };
+
+    private void updateStrip() {
+        if (strip == null) return;
+        strip.removeAllViews();
+        int tool = canvas.tool;
+        if (tool == CanvasView.TOOL_LASSO || tool == CanvasView.TOOL_HAND) {
+            String hint = tool == CanvasView.TOOL_LASSO
+                    ? "펜으로 영역을 둘러 선택 → 끌어서 이동, 오른쪽 아래 점으로 크기 조절"
+                    : "손가락·펜으로 페이지를 스크롤하고 두 손가락으로 확대/축소";
+            strip.addView(Ui.label(this, hint, 13, Ui.SUBTEXT, false));
+            return;
+        }
+        if (tool != CanvasView.TOOL_ERASER) {
+            for (Ui.Swatch q : quick) {
+                if (q.getParent() != null) ((ViewGroup) q.getParent()).removeView(q);
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(Ui.dp(this, 36), Ui.dp(this, 36));
+                strip.addView(q, lp);
+            }
+            TextView pal = icon(R.drawable.ic_palette, "색상 선택기");
+            pal.setOnClickListener(v -> ColorPicker.show(this, currentColor(), this::applyColor));
+            strip.addView(pal);
+            strip.addView(Ui.divider(this, true));
+        }
+        float[] presets = WIDTH_PRESETS[tool];
+        for (float w : presets) {
+            Ui.Dot d = new Ui.Dot(this, 0, 0);
+            float shown = tool == CanvasView.TOOL_HIGHLIGHTER ? w * 0.5f : tool == CanvasView.TOOL_ERASER ? w * 0.45f
+                    : tool == CanvasView.TOOL_TEXT ? w * 0.35f : w * 1.6f + 2;
+            int col = tool == CanvasView.TOOL_ERASER ? 0xFFBDBDBD : currentColor();
+            d.set(shown * getResources().getDisplayMetrics().density / 1.5f, col);
+            d.setChosen(Math.abs(currentWidth() - w) < 0.5f);
+            d.setOnClickListener(v -> {
+                setCurrentWidth(w);
+                updateStrip();
+            });
+            strip.addView(d, new LinearLayout.LayoutParams(Ui.dp(this, 40), Ui.dp(this, 40)));
+        }
+        if (widthDot.getParent() != null) ((ViewGroup) widthDot.getParent()).removeView(widthDot);
+        TextView opts = icon(R.drawable.ic_more_vert, "상세 설정");
+        opts.setOnClickListener(this::showToolOptions);
+        strip.addView(Ui.divider(this, true));
+        TextView label = Ui.label(this, TOOL_NAMES[tool] + " 설정", 13, Ui.ACCENT, true);
+        label.setPadding(Ui.dp(this, 6), Ui.dp(this, 8), Ui.dp(this, 6), Ui.dp(this, 8));
+        label.setOnClickListener(this::showToolOptions);
+        strip.addView(label);
+    }
+
+    private float currentWidth() {
+        switch (canvas.tool) {
+            case CanvasView.TOOL_HIGHLIGHTER: return canvas.hlWidth;
+            case CanvasView.TOOL_ERASER: return canvas.eraserSize;
+            case CanvasView.TOOL_TEXT: return canvas.textStyle.size;
+            default: return canvas.penWidth;
+        }
+    }
+
+    private void setCurrentWidth(float w) {
+        switch (canvas.tool) {
+            case CanvasView.TOOL_HIGHLIGHTER: canvas.hlWidth = w; break;
+            case CanvasView.TOOL_ERASER: canvas.eraserSize = w; break;
+            case CanvasView.TOOL_TEXT: canvas.textStyle.size = w; break;
+            default: canvas.penWidth = w; break;
+        }
+        updateDot();
     }
 
     private Ui.Swatch makeQuick(int slot, int color) {
@@ -271,13 +384,8 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
     }
 
     private void rebuildQuick(int slot, int color) {
-        Ui.Swatch old = quick[slot];
-        ViewGroup parent = (ViewGroup) old.getParent();
-        int idx = parent.indexOfChild(old);
-        Ui.Swatch s = makeQuick(slot, color);
-        parent.removeViewAt(idx);
-        parent.addView(s, idx, new LinearLayout.LayoutParams(Ui.dp(this, 36), Ui.dp(this, 36)));
-        quick[slot] = s;
+        quick[slot] = makeQuick(slot, color);
+        updateStrip();
         updateDot();
     }
 
@@ -290,6 +398,7 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
         if (tool != CanvasView.TOOL_LASSO) canvas.clearSelection();
         for (int i = 0; i < toolBtns.length; i++) Ui.setSelected(toolBtns[i], i == tool);
         updateDot();
+        updateStrip();
         canvas.invalidate();
     }
 
@@ -317,6 +426,7 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
             }
         }
         updateDot();
+        updateStrip();
     }
 
     private void updateDot() {
@@ -341,17 +451,18 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
         bar.setBackground(Ui.round(0xFF2B2B33, Ui.dp(this, 24)));
         bar.setElevation(Ui.dp(this, 6));
         bar.setPadding(Ui.dp(this, 10), Ui.dp(this, 4), Ui.dp(this, 10), Ui.dp(this, 4));
-        String[][] items = {{"✏️", "글자편집"}, {"🗑️", "삭제"}, {"📄", "복제"}, {"🎨", "색상"}, {"📚", "레이어로"}, {"✖", "해제"}};
-        for (int i = 0; i < items.length; i++) {
-            TextView t = Ui.toolButton(this, items[i][0], items[i][1]);
-            t.setTextColor(0xFFFFFFFF);
+        int[] icons = {R.drawable.ic_edit, R.drawable.ic_delete, R.drawable.ic_content_copy, R.drawable.ic_palette, R.drawable.ic_layers, R.drawable.ic_close};
+        String[] labels = {"글자편집", "삭제", "복제", "색상", "레이어로", "해제"};
+        for (int i = 0; i < icons.length; i++) {
+            TextView t = Ui.iconButton(this, icons[i], labels[i]);
+            Ui.tintIcon(t, 0xFFFFFFFF);
             final int k = i;
             t.setOnClickListener(v -> {
                 switch (k) {
                     case 0: editSelectedText(); break;
                     case 1: canvas.deleteSelection(); break;
                     case 2: canvas.duplicateSelection(); break;
-                    case 3: ColorPicker.show(this, canvas.penColor, c -> canvas.recolorSelection(c)); break;
+                    case 3: ColorPicker.show(this, canvas.penColor, canvas::recolorSelection); break;
                     case 4: chooseLayerForSelection(); break;
                     default: canvas.clearSelection(); break;
                 }
@@ -388,33 +499,29 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
         bar.setPadding(Ui.dp(this, 8), Ui.dp(this, 2), Ui.dp(this, 8), Ui.dp(this, 2));
         bar.setGravity(Gravity.CENTER);
         if (meta.infinite) {
-            TextView home = Ui.toolButton(this, "🎯 처음 위치로", null);
-            home.setTextSize(14);
+            TextView home = Ui.iconText(this, R.drawable.ic_my_location, "처음 위치로", Ui.TEXT);
             home.setOnClickListener(v -> canvas.resetInfiniteView());
             bar.addView(home);
             bar.addView(Ui.label(this, "   ∞ 무한 캔버스 — 한 손가락으로 이동, 두 손가락으로 확대/축소   ", 13, Ui.SUBTEXT, false));
         } else {
-            TextView prev = Ui.toolButton(this, "▲", null);
+            TextView prev = icon(R.drawable.ic_keyboard_arrow_up, "이전 페이지");
             prev.setOnClickListener(v -> canvas.goToPage(canvas.pageIndex() - 1));
             bar.addView(prev);
             pageLabel = Ui.label(this, "1 / 1", 14, Ui.TEXT, true);
             pageLabel.setPadding(Ui.dp(this, 10), Ui.dp(this, 10), Ui.dp(this, 10), Ui.dp(this, 10));
             pageLabel.setOnClickListener(v -> togglePanel());
             bar.addView(pageLabel);
-            TextView next = Ui.toolButton(this, "▼", null);
+            TextView next = icon(R.drawable.ic_keyboard_arrow_down, "다음 페이지");
             next.setOnClickListener(v -> canvas.goToPage(canvas.pageIndex() + 1));
             bar.addView(next);
             bar.addView(Ui.divider(this, true));
-            TextView add = Ui.toolButton(this, "＋ 페이지", null);
-            add.setTextSize(14);
+            TextView add = Ui.iconText(this, R.drawable.ic_add, "페이지 추가", Ui.TEXT);
             add.setOnClickListener(v -> addPage());
             bar.addView(add);
-            TextView panel = Ui.toolButton(this, "📑 페이지 보기", null);
-            panel.setTextSize(14);
+            TextView panel = Ui.iconText(this, R.drawable.ic_view_agenda, "페이지 보기", Ui.TEXT);
             panel.setOnClickListener(v -> togglePanel());
             bar.addView(panel);
-            TextView pm = Ui.toolButton(this, "⋯ 페이지", null);
-            pm.setTextSize(14);
+            TextView pm = Ui.iconText(this, R.drawable.ic_more_vert, "페이지 메뉴", Ui.TEXT);
             pm.setOnClickListener(this::showPageMenu);
             bar.addView(pm);
         }
@@ -598,7 +705,10 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
         popup.setElevation(Ui.dp(this, 12));
         popup.setBackgroundDrawable(Ui.round(Ui.SURFACE, Ui.dp(this, 16)));
         popup.setOutsideTouchable(true);
-        popup.setOnDismissListener(this::saveToolPrefs);
+        popup.setOnDismissListener(() -> {
+            saveToolPrefs();
+            updateStrip();
+        });
         popup.showAsDropDown(anchor, 0, Ui.dp(this, 4));
     }
 
@@ -858,8 +968,7 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
             clp.topMargin = Ui.dp(this, 8);
 
             LinearLayout r = Ui.row(this);
-            TextView eye = Ui.toolButton(this, l.visible ? "👁" : "🚫", null);
-            eye.setTextSize(16);
+            TextView eye = icon(l.visible ? R.drawable.ic_visibility : R.drawable.ic_visibility_off, "보이기/숨기기");
             eye.setOnClickListener(v -> {
                 l.visible = !l.visible;
                 dirty = true;
@@ -874,21 +983,19 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
                 refreshLayers();
             });
             r.addView(name, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-            TextView up = Ui.toolButton(this, "▲", null);
-            up.setTextSize(13);
+            TextView up = icon(R.drawable.ic_keyboard_arrow_up, "위로");
             up.setOnClickListener(v -> {
                 canvas.moveLayer(i, 1);
                 refreshLayers();
             });
             r.addView(up);
-            TextView down = Ui.toolButton(this, "▼", null);
-            down.setTextSize(13);
+            TextView down = icon(R.drawable.ic_keyboard_arrow_down, "아래로");
             down.setOnClickListener(v -> {
                 canvas.moveLayer(i, -1);
                 refreshLayers();
             });
             r.addView(down);
-            TextView menu = Ui.toolButton(this, "⋯", null);
+            TextView menu = icon(R.drawable.ic_more_vert, "레이어 메뉴");
             menu.setOnClickListener(v -> layerMenu(v, i));
             r.addView(menu);
             card.addView(r);
@@ -1019,6 +1126,7 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
     @Override
     protected void onPause() {
         super.onPause();
+        autosave.removeCallbacks(autosaveTick);
         if (popup != null) popup.dismiss();
         if (layerPopup != null) layerPopup.dismiss();
         if (canvas != null) saveToolPrefs();

@@ -7,6 +7,8 @@ public class Page {
     public float w, h;
     public int template;
     public boolean bookmarked;
+    /** PDF 가져오기 등 배경 이미지 파일명 (images/ 폴더), 없으면 null */
+    public String bgImage;
     public ArrayList<Layer> layers = new ArrayList<>();
 
     public Page(float w, float h, int template) {
@@ -28,6 +30,7 @@ public class Page {
     public Page copy() {
         Page p = new Page(w, h, template);
         p.bookmarked = bookmarked;
+        p.bgImage = bgImage;
         for (Layer l : layers) p.layers.add(l.copy());
         return p;
     }

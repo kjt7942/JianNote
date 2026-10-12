@@ -11,12 +11,18 @@ import com.kjt.jiannote.model.Page;
 import java.util.Collection;
 
 public class Renderer {
+    private static final android.graphics.Paint BG_PAINT = new android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG);
 
     /** 캔버스는 이미 월드 좌표로 변환된 상태여야 한다. vis = 보이는 월드 영역 */
     public static void drawPage(Canvas c, Page p, int paperColor, RenderContext rc, RectF vis, float scale,
                                 Collection<Element> excluded) {
         if (p.isInfinite()) {
             Paper.drawInfinite(c, p.template, paperColor, vis, scale);
+        } else if (p.bgImage != null) {
+            Paper.drawPage(c, Paper.BLANK, 0xFFFFFFFF, p.w, p.h, vis, scale);
+            android.graphics.Bitmap bg = rc == null ? null : rc.image(p.bgImage);
+            if (bg != null) c.drawBitmap(bg, null, new RectF(0, 0, p.w, p.h), BG_PAINT);
+            c.save();
         } else {
             Paper.drawPage(c, p.template, paperColor, p.w, p.h, vis, scale);
             c.save();
