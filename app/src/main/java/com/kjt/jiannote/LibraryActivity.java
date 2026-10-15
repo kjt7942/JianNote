@@ -36,9 +36,9 @@ import java.util.HashMap;
 import java.util.Locale;
 
 /** 서재 (노트북 목록) */
-public class LibraryActivity extends Activity implements Billing.Listener {
+public class LibraryActivity extends Activity {
     private static final int REQ_PDF = 21, REQ_BACKUP = 22;
-    public static final String PRIVACY_URL = "https://github.com/kjt7942/JianNotePremium/blob/main/PRIVACY.md";
+    public static final String PRIVACY_URL = "https://github.com/kjt7942/JianNote/blob/main/PRIVACY.md";
 
     private Store store;
     private Premium premium;
@@ -62,7 +62,6 @@ public class LibraryActivity extends Activity implements Billing.Listener {
         store = new Store(this);
         premium = new Premium(this);
         prefs = new Prefs(this);
-        Billing.get(this).connect();
 
         LinearLayout root = Ui.col(this);
         root.setBackgroundColor(Ui.BG);
@@ -83,7 +82,6 @@ public class LibraryActivity extends Activity implements Billing.Listener {
         LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         blp.setMargins(Ui.dp(this, 10), 0, 0, 0);
         header.addView(badge, blp);
-        badge.setOnClickListener(v -> Dialogs.premium(this, premium, this::refresh));
         header.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
 
         EditText search = new EditText(this);
@@ -142,7 +140,6 @@ public class LibraryActivity extends Activity implements Billing.Listener {
         bannerText.setPadding(Ui.dp(this, 10), 0, Ui.dp(this, 10), 0);
         banner.addView(bannerText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         banner.addView(Ui.label(this, "업그레이드 ›", 13, 0xFFB26A00, true));
-        banner.setOnClickListener(v -> Dialogs.premium(this, premium, this::refresh));
         LinearLayout.LayoutParams bnlp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         bnlp.setMargins(p, Ui.dp(this, 4), p, Ui.dp(this, 4));
         root.addView(banner, bnlp);
@@ -203,20 +200,12 @@ public class LibraryActivity extends Activity implements Billing.Listener {
     @Override
     protected void onResume() {
         super.onResume();
-        Billing.get(this).addListener(this);
-        Billing.get(this).refresh();
         refresh();
     }
 
     @Override
     protected void onPause() {
         super.onPause();
-        Billing.get(this).removeListener(this);
-    }
-
-    @Override
-    public void onPremiumChanged(boolean p) {
-        refresh();
     }
 
     private void refresh() {
@@ -232,12 +221,8 @@ public class LibraryActivity extends Activity implements Billing.Listener {
             }
         });
         thumbs.clear();
-        boolean isP = premium.isPremium();
-        badge.setText(isP ? "PREMIUM" : "FREE");
-        badge.setBackground(Ui.round(isP ? Ui.GOLD : 0xFF9E9E9E, Ui.dp(this, 10)));
-        banner.setVisibility(isP ? View.GONE : View.VISIBLE);
-        bannerText.setText("무료 버전 · 노트 " + Math.min(all.size(), Premium.FREE_NOTEBOOKS) + " / " + Premium.FREE_NOTEBOOKS
-                + "권 사용 중 — 프리미엄은 노트·레이어 무제한, 프리미엄 속지, 워터마크 없는 PDF");
+        badge.setVisibility(View.GONE);
+        banner.setVisibility(View.GONE);
         filter();
     }
 
@@ -264,7 +249,7 @@ public class LibraryActivity extends Activity implements Billing.Listener {
 
     private boolean checkLimit() {
         if (all.size() >= premium.notebookLimit()) {
-            Dialogs.limit(this, premium, "무료 버전에서는 노트를 " + Premium.FREE_NOTEBOOKS + "권까지 만들 수 있습니다.", this::refresh);
+            Dialogs.limit(this, premium, "노트를 더 만들 수 없습니다.", this::refresh);
             return false;
         }
         return true;
@@ -418,7 +403,7 @@ public class LibraryActivity extends Activity implements Billing.Listener {
                         }
                     });
         } else if (req == REQ_BACKUP) {
-            int room = premium.isPremium() ? Integer.MAX_VALUE : Math.max(0, Premium.FREE_NOTEBOOKS - all.size());
+            int room = Integer.MAX_VALUE;
             AlertDialog pd = progress("백업을 복원하는 중…");
             ImportExport.importBackup(this, store, uri, room, new ImportExport.Done<Integer>() {
                 @Override
@@ -579,7 +564,6 @@ public class LibraryActivity extends Activity implements Billing.Listener {
     private void showSettings() {
         boolean finger = prefs.b("fingerDraw", false);
         String[] items = {
-                "👑  프리미엄",
                 "☝️  손가락으로 그리기: " + (finger ? "켜짐" : "꺼짐 (S펜 전용)"),
                 "💾  모든 노트 백업하기",
                 "📥  백업 파일 가져오기",
@@ -592,22 +576,21 @@ public class LibraryActivity extends Activity implements Billing.Listener {
                 .setTitle("설정")
                 .setItems(items, (d, w) -> {
                     switch (w) {
-                        case 0: Dialogs.premium(this, premium, this::refresh); break;
-                        case 1:
+                        case 0:
                             prefs.put("fingerDraw", !finger);
                             Toast.makeText(this, !finger ? "손가락 필기를 켰습니다" : "S펜으로만 필기합니다 (손가락은 스크롤/확대)", Toast.LENGTH_SHORT).show();
                             break;
-                        case 2: backupAll(); break;
-                        case 3: pickBackup(); break;
-                        case 4: onboarding(); break;
-                        case 5:
+                        case 1: backupAll(); break;
+                        case 2: pickBackup(); break;
+                        case 3: onboarding(); break;
+                        case 4:
                             try {
                                 startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(PRIVACY_URL)));
                             } catch (Exception e) {
                                 Toast.makeText(this, PRIVACY_URL, Toast.LENGTH_LONG).show();
                             }
                             break;
-                        case 6: licenses(); break;
+                        case 5: licenses(); break;
                         default: about(); break;
                     }
                 })
@@ -619,7 +602,7 @@ public class LibraryActivity extends Activity implements Billing.Listener {
                 .setMessage("• 나눔고딕, 나눔명조, 나눔손글씨 펜 — © NAVER Corp., SIL Open Font License 1.1\n"
                         + "• 개구쟁이(Gaegu), 도현, 주아, 푸어스토리, 싱글데이 — SIL Open Font License 1.1\n"
                         + "• Material Symbols 아이콘 — © Google, Apache License 2.0\n"
-                        + "• Google Play Billing Library — © Google\n\n"
+                        + "\n"
                         + "SIL OFL 1.1: 글꼴은 자유롭게 사용·재배포할 수 있으며 단독 판매는 할 수 없습니다.\nhttps://openfontlicense.org")
                 .setPositiveButton("확인", null).show();
     }
@@ -636,10 +619,6 @@ public class LibraryActivity extends Activity implements Billing.Listener {
         box.addView(Ui.label(this, "JianNote", 22, Ui.TEXT, true));
         TextView v = Ui.label(this, "버전 " + ver, 13, Ui.SUBTEXT, false);
         v.setPadding(0, Ui.dp(this, 2), 0, Ui.dp(this, 12));
-        v.setOnLongClickListener(x -> {
-            Dialogs.devCode(this, premium, this::refresh);
-            return true;
-        });
         box.addView(v);
         box.addView(Ui.label(this, "S펜 필압 · 레이어 · 무한 캔버스 · PDF 필기를 지원하는 손글씨 노트\n\n"
                 + "모든 노트는 이 기기 안에만 저장되며 외부로 전송되지 않습니다. 기기를 바꾸기 전에 '모든 노트 백업하기'를 이용하세요.", 14, Ui.TEXT, false));

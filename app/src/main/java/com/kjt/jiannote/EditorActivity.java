@@ -625,12 +625,11 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
 
     private void showMenu(View anchor) {
         PopupMenu pm = new PopupMenu(this, anchor);
-        pm.getMenu().add(0, 1, 0, "📄 PDF로 내보내기" + (premium.isPremium() ? "" : " (워터마크)"));
+        pm.getMenu().add(0, 1, 0, "📄 PDF로 내보내기");
         pm.getMenu().add(0, 2, 0, "🖼️ 현재 페이지를 이미지로 저장");
         pm.getMenu().add(0, 3, 0, "📃 속지 변경");
         pm.getMenu().add(0, 4, 0, "🎨 종이 색 변경");
         pm.getMenu().add(0, 5, 0, "✒️ 필압 / 펜 설정");
-        pm.getMenu().add(0, 6, 0, "👑 프리미엄");
         pm.setOnMenuItemClickListener(item -> {
             switch (item.getItemId()) {
                 case 1: exportPdf(); break;
@@ -638,7 +637,6 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
                 case 3: chooseTemplate(); break;
                 case 4: choosePaper(); break;
                 case 5: selectTool(CanvasView.TOOL_PEN); showToolOptions(toolBtns[0]); break;
-                case 6: Dialogs.premium(this, premium, null); break;
                 default: break;
             }
             return true;
@@ -649,7 +647,7 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
     private void exportPdf() {
         save();
         try {
-            Uri u = Exporter.exportPdf(this, meta, doc, rc, !premium.isPremium());
+            Uri u = Exporter.exportPdf(this, meta, doc, rc, false);
             new AlertDialog.Builder(this).setTitle("PDF 저장 완료")
                     .setMessage("다운로드/JianNote 폴더에 저장했습니다.")
                     .setNegativeButton("확인", null)
@@ -937,9 +935,6 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
         });
         head.addView(add);
         box.addView(head);
-        if (!premium.isPremium()) {
-            box.addView(Ui.label(this, "무료: 페이지당 레이어 " + Premium.FREE_LAYERS + "개 · 👑 프리미엄: " + Premium.MAX_LAYERS + "개", 11, Ui.SUBTEXT, false));
-        }
         layerList = Ui.col(this);
         box.addView(layerList);
         refreshLayers();
@@ -1202,6 +1197,6 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
 
     @Override
     public void onLayerLimit() {
-        Dialogs.limit(this, premium, "무료 버전에서는 페이지당 레이어를 " + Premium.FREE_LAYERS + "개까지 사용할 수 있습니다.", null);
+        Dialogs.limit(this, premium, "레이어는 페이지당 " + Premium.MAX_LAYERS + "개까지 만들 수 있습니다.", null);
     }
 }

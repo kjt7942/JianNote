@@ -20,7 +20,7 @@ public class Paper {
     public static final int COUNT = NAMES.length;
 
     public static boolean isPremium(int t) {
-        return t >= SMALL_GRID;
+        return false;
     }
 
     public static final int[] PAPER_COLORS = {0xFFFFFFFF, 0xFFFFF8E7, 0xFFF1F8E9, 0xFFE3F2FD, 0xFF2B2B2E};
