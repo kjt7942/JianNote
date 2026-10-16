@@ -39,6 +39,8 @@ public class Dialogs {
         final int template;
         int paper = 0xFFFFFFFF;
         boolean landscape;
+        /** 세로 기준 높이/너비 비율 (A4 = 297/210) */
+        float ratio = 297f / 210f;
         boolean chosen;
         boolean locked;
         String label;
@@ -53,7 +55,7 @@ public class Dialogs {
         @Override
         protected void onDraw(Canvas c) {
             float d = getResources().getDisplayMetrics().density;
-            float pw = landscape ? 1754 : 1240, ph = landscape ? 1240 : 1754;
+            float pw = landscape ? 1240 * ratio : 1240, ph = landscape ? 1240 : 1240 * ratio;
             float avW = getWidth() - 8 * d, avH = getHeight() - 26 * d;
             float s = Math.min(avW / pw, avH / ph);
             float ox = (getWidth() - pw * s) / 2f, oy = 4 * d;
@@ -125,6 +127,53 @@ public class Dialogs {
         rbPort.setChecked(true);
         root.addView(ori);
 
+        // 페이지 크기 (기본 A4)
+        root.addView(section(a, "페이지 크기"));
+        HorizontalScrollView shs = new HorizontalScrollView(a);
+        shs.setHorizontalScrollBarEnabled(false);
+        LinearLayout sizeRow = Ui.row(a);
+        shs.addView(sizeRow);
+        root.addView(shs);
+        final ArrayList<TextView> sizeBtns = new ArrayList<>();
+        final ArrayList<TemplateChip> chipRef = new ArrayList<>();
+        Runnable[] updateChips = new Runnable[1];
+        updateChips[0] = () -> {
+            float r = Math.max(m.sizeWmm, m.sizeHmm) / Math.min(m.sizeWmm, m.sizeHmm);
+            for (TemplateChip ch : chipRef) {
+                ch.ratio = r;
+                ch.invalidate();
+            }
+        };
+        for (int i = 0; i <= com.kjt.jiannote.model.PageSize.NAMES.length; i++) {
+            boolean custom = i == com.kjt.jiannote.model.PageSize.NAMES.length;
+            String name = custom ? "직접 입력" : com.kjt.jiannote.model.PageSize.NAMES[i];
+            String sub = custom ? "mm" : Math.round(com.kjt.jiannote.model.PageSize.MM[i][0]) + "×" + Math.round(com.kjt.jiannote.model.PageSize.MM[i][1]);
+            TextView t = Ui.pill(a, name + "\n" + sub, i == 0);
+            t.setTextSize(12);
+            t.setPadding(Ui.dp(a, 12), Ui.dp(a, 6), Ui.dp(a, 12), Ui.dp(a, 6));
+            sizeBtns.add(t);
+            final int idx = i;
+            t.setOnClickListener(v -> {
+                if (custom) {
+                    customSize(a, m.sizeWmm, m.sizeHmm, (w, h) -> {
+                        m.sizeWmm = w;
+                        m.sizeHmm = h;
+                        sizeBtns.get(idx).setText("직접 입력\n" + Math.round(w) + "×" + Math.round(h));
+                        for (int j = 0; j < sizeBtns.size(); j++) TextTools.markPill(a, sizeBtns.get(j), j == idx);
+                        updateChips[0].run();
+                    });
+                    return;
+                }
+                m.sizeWmm = com.kjt.jiannote.model.PageSize.MM[idx][0];
+                m.sizeHmm = com.kjt.jiannote.model.PageSize.MM[idx][1];
+                for (int j = 0; j < sizeBtns.size(); j++) TextTools.markPill(a, sizeBtns.get(j), j == idx);
+                updateChips[0].run();
+            });
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.setMargins(0, 0, Ui.dp(a, 6), 0);
+            sizeRow.addView(t, lp);
+        }
+
         root.addView(section(a, "속지"));
         HorizontalScrollView hs = new HorizontalScrollView(a);
         LinearLayout chips = Ui.row(a);
@@ -139,6 +188,7 @@ public class Dialogs {
             lp.setMargins(Ui.dp(a, 4), Ui.dp(a, 4), Ui.dp(a, 4), Ui.dp(a, 4));
             chips.addView(chip, lp);
             chipList.add(chip);
+            chipRef.add(chip);
             final int tt = t;
             chip.setOnClickListener(v -> {
                 if (Paper.isPremium(tt) && !premium.isPremium()) {
@@ -220,6 +270,8 @@ public class Dialogs {
             boolean inf = id == rbInf.getId();
             rbPort.setEnabled(!inf);
             rbLand.setEnabled(!inf);
+            for (TextView t : sizeBtns) t.setEnabled(!inf);
+            shs.setAlpha(inf ? 0.4f : 1f);
         });
 
         ScrollView sv = new ScrollView(a);
@@ -376,6 +428,57 @@ public class Dialogs {
         TextView t = Ui.label(c, s, 13, Ui.SUBTEXT, true);
         t.setPadding(0, Ui.dp(c, 14), 0, Ui.dp(c, 4));
         return t;
+    }
+
+    public interface SizeCb {
+        void on(float wMm, float hMm);
+    }
+
+    /** 페이지 크기 직접 입력 (mm) */
+    public static void customSize(Activity a, float w, float h, SizeCb cb) {
+        LinearLayout box = Ui.row(a);
+        int p = Ui.dp(a, 20);
+        box.setPadding(p, Ui.dp(a, 8), p, 0);
+        EditText ew = new EditText(a);
+        ew.setInputType(InputType.TYPE_CLASS_NUMBER);
+        ew.setText(String.valueOf(Math.round(w)));
+        ew.setHint("너비");
+        EditText eh = new EditText(a);
+        eh.setInputType(InputType.TYPE_CLASS_NUMBER);
+        eh.setText(String.valueOf(Math.round(h)));
+        eh.setHint("높이");
+        box.addView(ew, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        box.addView(Ui.label(a, "  ×  ", 16, Ui.TEXT, true));
+        box.addView(eh, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        box.addView(Ui.label(a, "  mm", 14, Ui.SUBTEXT, false));
+        new AlertDialog.Builder(a).setTitle("페이지 크기 (50~600mm)").setView(box)
+                .setNegativeButton("취소", null)
+                .setPositiveButton("확인", (d, x) -> {
+                    try {
+                        float nw = Float.parseFloat(ew.getText().toString());
+                        float nh = Float.parseFloat(eh.getText().toString());
+                        if (nw < 50 || nh < 50 || nw > 600 || nh > 600) throw new NumberFormatException();
+                        cb.on(nw, nh);
+                    } catch (NumberFormatException e) {
+                        Toast.makeText(a, "50~600 사이 숫자를 입력하세요", Toast.LENGTH_SHORT).show();
+                    }
+                }).show();
+    }
+
+    /** 페이지 크기 고르기 (현재 크기 표시) */
+    public static void pageSizePicker(Activity a, float curWmm, float curHmm, SizeCb cb) {
+        String[] items = new String[com.kjt.jiannote.model.PageSize.NAMES.length + 1];
+        for (int i = 0; i < com.kjt.jiannote.model.PageSize.NAMES.length; i++) {
+            float[] mm = com.kjt.jiannote.model.PageSize.MM[i];
+            boolean on = Math.abs(Math.min(curWmm, curHmm) - mm[0]) < 1.5f && Math.abs(Math.max(curWmm, curHmm) - mm[1]) < 1.5f;
+            items[i] = (on ? "✓  " : "     ") + com.kjt.jiannote.model.PageSize.NAMES[i] + "  (" + Math.round(mm[0]) + "×" + Math.round(mm[1]) + "mm)";
+        }
+        items[items.length - 1] = "     직접 입력…";
+        new AlertDialog.Builder(a).setTitle("페이지 크기 (현재 " + com.kjt.jiannote.model.PageSize.label(curWmm, curHmm) + ")")
+                .setItems(items, (d, w) -> {
+                    if (w == items.length - 1) customSize(a, Math.min(curWmm, curHmm), Math.max(curWmm, curHmm), cb);
+                    else cb.on(com.kjt.jiannote.model.PageSize.MM[w][0], com.kjt.jiannote.model.PageSize.MM[w][1]);
+                }).show();
     }
 
     /** 제한 안내 (현재는 제한이 없어 사용되지 않음) */

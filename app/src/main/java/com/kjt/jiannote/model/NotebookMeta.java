@@ -11,6 +11,8 @@ public class NotebookMeta {
     public int template;
     public boolean infinite;
     public boolean landscape;
+    /** 페이지 크기 (세로 기준 mm). 기본 A4 */
+    public float sizeWmm = 210, sizeHmm = 297;
     public boolean favorite;
     public long created;
     public long modified;
@@ -33,6 +35,8 @@ public class NotebookMeta {
         o.put("created", created);
         o.put("modified", modified);
         o.put("pages", pageCount);
+        o.put("sizeW", (double) sizeWmm);
+        o.put("sizeH", (double) sizeHmm);
         o.put("category", category);
         o.put("coverImage", coverImage);
         return o;
@@ -51,6 +55,8 @@ public class NotebookMeta {
         m.created = o.optLong("created", System.currentTimeMillis());
         m.modified = o.optLong("modified", m.created);
         m.pageCount = o.optInt("pages", 1);
+        m.sizeWmm = (float) o.optDouble("sizeW", 210);
+        m.sizeHmm = (float) o.optDouble("sizeH", 297);
         m.category = o.optString("category", "");
         m.coverImage = o.optBoolean("coverImage", false);
         return m;
@@ -58,11 +64,11 @@ public class NotebookMeta {
 
     public float pageW() {
         if (infinite) return 0;
-        return landscape ? 1754 : 1240;
+        return PageSize.px(landscape ? Math.max(sizeWmm, sizeHmm) : Math.min(sizeWmm, sizeHmm));
     }
 
     public float pageH() {
         if (infinite) return 0;
-        return landscape ? 1240 : 1754;
+        return PageSize.px(landscape ? Math.min(sizeWmm, sizeHmm) : Math.max(sizeWmm, sizeHmm));
     }
 }

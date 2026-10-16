@@ -765,6 +765,10 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
         pm.getMenu().add(0, 4, 0, "페이지 위로 이동");
         pm.getMenu().add(0, 5, 0, "페이지 아래로 이동");
         pm.getMenu().add(0, 6, 0, "속지 변경");
+        if (!cur.isInfinite()) {
+            pm.getMenu().add(0, 10, 0, "페이지 크기 변경 (현재 " + com.kjt.jiannote.model.PageSize.label(
+                    com.kjt.jiannote.model.PageSize.mm(cur.w), com.kjt.jiannote.model.PageSize.mm(cur.h)) + ")");
+        }
         pm.getMenu().add(0, 8, 0, "이미지로 새 페이지 추가");
         pm.getMenu().add(0, 9, 0, "이 페이지의 고정 모두 해제");
         pm.getMenu().add(0, 7, 0, "현재 페이지 삭제");
@@ -783,6 +787,7 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
                 case 6: chooseTemplate(); break;
                 case 7: confirmDeletePage(i); break;
                 case 8: pickPageImage(); break;
+                case 10: changePageSize(); break;
                 case 9: {
                     int n = canvas.unlockAllOnPage();
                     Toast.makeText(this, n > 0 ? n + "개 항목의 고정을 해제했습니다" : "고정된 항목이 없습니다", Toast.LENGTH_SHORT).show();
@@ -838,6 +843,31 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
                             });
                     }
                 }).show();
+    }
+
+    /** 페이지 크기 바꾸기 (각 페이지의 가로/세로 방향은 유지, 내용 위치는 그대로) */
+    private void changePageSize() {
+        Page cur = canvas.page();
+        Dialogs.pageSizePicker(this, com.kjt.jiannote.model.PageSize.mm(cur.w), com.kjt.jiannote.model.PageSize.mm(cur.h), (wMm, hMm) ->
+                askScope("페이지 크기를 바꿀 페이지", all -> {
+                    float a = com.kjt.jiannote.model.PageSize.px(Math.min(wMm, hMm));
+                    float b = com.kjt.jiannote.model.PageSize.px(Math.max(wMm, hMm));
+                    for (Page p : all ? doc.pages : java.util.Collections.singletonList(canvas.page())) {
+                        if (p.isInfinite()) continue;
+                        boolean land = p.w > p.h;
+                        p.w = land ? b : a;
+                        p.h = land ? a : b;
+                    }
+                    if (all) {
+                        meta.sizeWmm = Math.min(wMm, hMm);
+                        meta.sizeHmm = Math.max(wMm, hMm);
+                    }
+                    canvas.pagesChanged();
+                    canvas.fitPage();
+                    dirty = true;
+                    if (pagePanel.isOpen()) pagePanel.rebuild();
+                    Toast.makeText(this, "페이지 크기를 " + com.kjt.jiannote.model.PageSize.label(wMm, hMm) + "(으)로 바꿨습니다", Toast.LENGTH_SHORT).show();
+                }));
     }
 
     private void pickTemplateFile(String mime, int req) {

@@ -968,7 +968,7 @@ public class LibraryActivity extends Activity {
             cover.bind(m, th, cimg);
             name.setText(m.title);
             String date = new SimpleDateFormat("yyyy.MM.dd", Locale.KOREA).format(new Date(m.modified));
-            sub.setText((m.infinite ? "무한 캔버스" : m.pageCount + "페이지") + " · " + date);
+            sub.setText((m.infinite ? "무한 캔버스" : com.kjt.jiannote.model.PageSize.label(m.sizeWmm, m.sizeHmm) + " · " + m.pageCount + "페이지") + " · " + date);
             return box;
         }
     }
