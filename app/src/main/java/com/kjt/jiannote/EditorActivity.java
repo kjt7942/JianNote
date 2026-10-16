@@ -439,6 +439,45 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
             }
             strip.addView(Ui.divider(this, true));
         }
+        if (tool == CanvasView.TOOL_TAPE) {
+            // 테이프 전용 색 팔레트 (펜 색과 따로)
+            for (int c : TAPE_COLORS) {
+                Ui.Swatch sw = new Ui.Swatch(this, c);
+                sw.setChosen((c | 0xFF000000) == (canvas.tapeColor | 0xFF000000));
+                sw.setOnClickListener(v -> {
+                    canvas.tapeColor = c;
+                    saveToolPrefs();
+                    updateStrip();
+                });
+                strip.addView(sw, new LinearLayout.LayoutParams(Ui.dp(this, 34), Ui.dp(this, 34)));
+            }
+            TextView pal = icon(R.drawable.ic_palette, "테이프 색 직접 고르기");
+            pal.setOnClickListener(v -> ColorPicker.show(this, canvas.tapeColor, c -> {
+                canvas.tapeColor = c;
+                saveToolPrefs();
+                updateStrip();
+            }));
+            strip.addView(pal);
+            strip.addView(Ui.divider(this, true));
+            String[] names = {"얇게", "보통", "굵게"};
+            float[] ws = WIDTH_PRESETS[tool];
+            for (int i = 0; i < ws.length; i++) {
+                final float w = ws[i];
+                TextView t = stripChip(names[i], Math.abs(canvas.tapeWidth - w) < 0.5f);
+                t.setOnClickListener(v -> {
+                    canvas.tapeWidth = w;
+                    saveToolPrefs();
+                    updateStrip();
+                });
+                strip.addView(t);
+            }
+            strip.addView(Ui.divider(this, true));
+            TextView label = Ui.label(this, "테이프 설정", 13, Ui.ACCENT, true);
+            label.setPadding(Ui.dp(this, 6), Ui.dp(this, 8), Ui.dp(this, 6), Ui.dp(this, 8));
+            label.setOnClickListener(this::showToolOptions);
+            strip.addView(label);
+            return;
+        }
         if (tool != CanvasView.TOOL_ERASER) {
             for (Ui.Swatch q : quick) {
                 if (q.getParent() != null) ((ViewGroup) q.getParent()).removeView(q);
@@ -497,6 +536,8 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
         canvas.eraserHlOnly = m == 2;
         canvas.eraserPartial = m != 1;
     }
+
+    private static final int[] TAPE_COLORS = {0xFFFF8A65, 0xFFFFD54F, 0xFFA5D6A7, 0xFF81D4FA, 0xFFF48FB1, 0xFFB39DDB, 0xFFB0BEC5, 0xFF616161};
 
     private float currentWidth() {
         switch (canvas.tool) {
@@ -856,7 +897,7 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
         items.add("기본 속지 고르기 (줄·모눈·도트 등)");
         items.add("사진으로 속지 만들기");
         items.add("PDF로 속지 만들기");
-        if (cur.hasImageTemplate()) items.add("사진·PDF 속지 지우기");
+        if (cur.bgImage != null) items.add("사진·PDF 배경 지우기 (빈 속지로)");
         new AlertDialog.Builder(this).setTitle("속지 변경")
                 .setItems(items.toArray(new String[0]), (d, w) -> {
                     switch (w) {
@@ -866,7 +907,7 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
                         default:
                             askScope("사진·PDF 속지 지우기", all -> {
                                 for (Page p : all ? doc.pages : java.util.Collections.singletonList(canvas.page())) {
-                                    if (p.hasImageTemplate()) p.bgImage = null;
+                                    p.bgImage = null;
                                 }
                                 templateChanged();
                             });
@@ -925,6 +966,8 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
                 .show();
     }
 
+    private boolean confirmedBgReplace;
+
     private void applyImageTemplate(String file) {
         askScope("속지를 적용할 페이지", all -> {
             for (Page p : all ? doc.pages : java.util.Collections.singletonList(canvas.page())) p.bgImage = file;
@@ -941,17 +984,28 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
 
     private void chooseBasicTemplate() {
         Page cur = canvas.page();
+        if (cur.bgImage != null && !cur.hasImageTemplate() && !confirmedBgReplace) {
+            new AlertDialog.Builder(this).setTitle("속지 변경")
+                    .setMessage("이 페이지는 사진·PDF로 만든 페이지예요. 기본 속지로 바꾸면 사진·PDF 배경은 사라지고, 그 위에 쓴 필기는 그대로 남아요.")
+                    .setNegativeButton("취소", null)
+                    .setPositiveButton("바꾸기", (d, w) -> {
+                        confirmedBgReplace = true;
+                        chooseBasicTemplate();
+                    }).show();
+            return;
+        }
+        confirmedBgReplace = false;
         boolean land = !cur.isInfinite() && cur.w > cur.h;
         Dialogs.templatePicker(this, premium, meta.paperColor, land, cur.template, !cur.isInfinite() && canvas.pageCount() > 1,
                 (t, all) -> {
                     if (all) {
                         for (Page p : doc.pages) {
                             p.template = t;
-                            if (p.hasImageTemplate()) p.bgImage = null;
+                            p.bgImage = null;
                         }
                     } else {
                         cur.template = t;
-                        if (cur.hasImageTemplate()) cur.bgImage = null;
+                        cur.bgImage = null;
                     }
                     meta.template = t;
                     dirty = true;
