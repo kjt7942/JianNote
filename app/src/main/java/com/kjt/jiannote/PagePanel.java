@@ -80,7 +80,7 @@ public class PagePanel extends FrameLayout {
         add.setTooltipText("페이지 추가");
         add.setOnClickListener(v -> {
             Page cur = canvas.page();
-            canvas.addPage(Page.create(cur.w, cur.h, cur.template), canvas.pageIndex() + 1);
+            canvas.addPage(cur.blankLike(), canvas.pageIndex() + 1);
             host.onPagesEdited();
             rebuild();
         });
@@ -298,7 +298,7 @@ public class PagePanel extends FrameLayout {
         pm.setOnMenuItemClickListener(item -> {
             switch (item.getItemId()) {
                 case 1: p.bookmarked = !p.bookmarked; break;
-                case 2: canvas.addPage(Page.create(p.w, p.h, p.template), i + 1); break;
+                case 2: canvas.addPage(p.blankLike(), i + 1); break;
                 case 3: canvas.addPage(p.copy(), i + 1); break;
                 case 4: canvas.movePage(i, i - 1); break;
                 case 5: canvas.movePage(i, i + 1); break;

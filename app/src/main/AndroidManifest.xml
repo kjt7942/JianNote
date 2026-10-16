@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- 손글씨 인식 모델(Google ML Kit) 최초 1회 다운로드용 -->
+    <!-- GitHub Releases 업데이트 확인·다운로드용 -->
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- GitHub Releases 자동 업데이트 설치용 -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />

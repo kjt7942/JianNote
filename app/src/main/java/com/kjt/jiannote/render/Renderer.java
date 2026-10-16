@@ -21,7 +21,14 @@ public class Renderer {
         } else if (p.bgImage != null) {
             Paper.drawPage(c, Paper.BLANK, 0xFFFFFFFF, p.w, p.h, vis, scale);
             android.graphics.Bitmap bg = rc == null ? null : rc.image(p.bgImage);
-            if (bg != null) c.drawBitmap(bg, null, new RectF(0, 0, p.w, p.h), BG_PAINT);
+            if (bg != null) {
+                // 비율을 유지한 채 페이지를 꽉 채우도록 가운데 맞춰 자르기
+                float sc = Math.max(p.w / bg.getWidth(), p.h / bg.getHeight());
+                float sw = p.w / sc, sh = p.h / sc;
+                android.graphics.Rect src = new android.graphics.Rect(Math.round((bg.getWidth() - sw) / 2), Math.round((bg.getHeight() - sh) / 2),
+                        Math.round((bg.getWidth() + sw) / 2), Math.round((bg.getHeight() + sh) / 2));
+                c.drawBitmap(bg, src, new RectF(0, 0, p.w, p.h), BG_PAINT);
+            }
             c.save();
         } else {
             Paper.drawPage(c, p.template, paperColor, p.w, p.h, vis, scale);

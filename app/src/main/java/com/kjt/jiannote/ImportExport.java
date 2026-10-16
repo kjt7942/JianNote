@@ -157,6 +157,66 @@ public class ImportExport {
         return p;
     }
 
+    // ================= 사진·PDF 속지 =================
+
+    /** 사진을 속지 이미지(tpl_*.jpg)로 저장하고 파일 이름을 돌려준다 */
+    public static String templateFromImage(android.content.Context c, Uri uri, File imgDir) throws IOException {
+        android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
+        o.inJustDecodeBounds = true;
+        try (InputStream in = c.getContentResolver().openInputStream(uri)) {
+            android.graphics.BitmapFactory.decodeStream(in, null, o);
+        }
+        if (o.outWidth <= 0) throw new IOException("이미지를 읽을 수 없습니다");
+        int sample = 1;
+        while (Math.max(o.outWidth, o.outHeight) / sample > 2600) sample *= 2;
+        android.graphics.BitmapFactory.Options o2 = new android.graphics.BitmapFactory.Options();
+        o2.inSampleSize = sample;
+        Bitmap bm;
+        try (InputStream in = c.getContentResolver().openInputStream(uri)) {
+            bm = android.graphics.BitmapFactory.decodeStream(in, null, o2);
+        }
+        if (bm == null) throw new IOException("이미지를 읽을 수 없습니다");
+        bm = rotateByExif(c, uri, bm);
+        return saveTemplate(bm, imgDir);
+    }
+
+    public static int pdfPageCount(android.content.Context c, Uri uri) throws IOException {
+        try (ParcelFileDescriptor fd = c.getContentResolver().openFileDescriptor(uri, "r");
+             PdfRenderer pdf = new PdfRenderer(fd)) {
+            return pdf.getPageCount();
+        }
+    }
+
+    /** PDF 의 한 페이지(0부터)를 속지 이미지로 */
+    public static String templateFromPdf(android.content.Context c, Uri uri, int page, File imgDir) throws IOException {
+        try (ParcelFileDescriptor fd = c.getContentResolver().openFileDescriptor(uri, "r");
+             PdfRenderer pdf = new PdfRenderer(fd)) {
+            page = Math.max(0, Math.min(page, pdf.getPageCount() - 1));
+            try (PdfRenderer.Page pg = pdf.openPage(page)) {
+                float k = 2200f / Math.max(pg.getWidth(), pg.getHeight());
+                Bitmap bmp = Bitmap.createBitmap(Math.round(pg.getWidth() * k), Math.round(pg.getHeight() * k), Bitmap.Config.ARGB_8888);
+                bmp.eraseColor(Color.WHITE);
+                pg.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
+                return saveTemplate(bmp, imgDir);
+            }
+        } catch (SecurityException e) {
+            throw new IOException("암호가 걸린 PDF는 사용할 수 없습니다");
+        }
+    }
+
+    private static String saveTemplate(Bitmap bm, File imgDir) throws IOException {
+        Bitmap flat = Bitmap.createBitmap(bm.getWidth(), bm.getHeight(), Bitmap.Config.ARGB_8888);
+        flat.eraseColor(Color.WHITE);
+        new android.graphics.Canvas(flat).drawBitmap(bm, 0, 0, null);
+        String name = "tpl_" + UUID.randomUUID().toString().substring(0, 10) + ".jpg";
+        try (OutputStream os = new FileOutputStream(new File(imgDir, name))) {
+            flat.compress(Bitmap.CompressFormat.JPEG, 92, os);
+        }
+        bm.recycle();
+        flat.recycle();
+        return name;
+    }
+
     private static Bitmap rotateByExif(android.content.Context c, Uri uri, Bitmap bm) {
         try (InputStream in = c.getContentResolver().openInputStream(uri)) {
             android.media.ExifInterface ex = new android.media.ExifInterface(in);

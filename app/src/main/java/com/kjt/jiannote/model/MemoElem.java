@@ -54,22 +54,18 @@ public class MemoElem extends Element {
 
     @Override
     public void draw(Canvas c, RenderContext rc) {
-        float r = Math.min(w, h) * 0.03f;
         P.reset();
         P.setAntiAlias(true);
-        // 그림자
-        P.setColor(0x22000000);
-        c.drawRoundRect(x + 4, y + 6, x + w + 4, y + h + 6, r, r, P);
+        // 텍스트 상자처럼 평평한 직사각형 (그림자·둥근 모서리 없음)
         P.setColor(color);
-        c.drawRoundRect(x, y, x + w, y + h, r, r, P);
-        // 윗부분 접착 띠
-        P.setColor(0x14000000);
-        c.drawRect(x, y, x + w, y + Math.min(28, h * 0.1f), P);
-        P.setColor(0x33000000);
+        c.drawRect(x, y, x + w, y + h, P);
+        P.setColor(0x40000000);
         P.setStyle(Paint.Style.STROKE);
         P.setStrokeWidth(1.5f);
+        c.drawRect(x, y, x + w, y + h, P);
+        P.setColor(0x33000000); // 양식 선
         float pad = 24, sp = 40;
-        float top = y + Math.min(28, h * 0.1f) + sp * 0.6f;
+        float top = y + sp * 0.4f;
         switch (pattern) {
             case LINED:
                 for (float ly = top + sp * 0.4f; ly < y + h - 10; ly += sp) c.drawLine(x + pad, ly, x + w - pad, ly, P);

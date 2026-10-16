@@ -42,7 +42,7 @@ import java.util.UUID;
 
 /** 노트 편집 화면 */
 public class EditorActivity extends Activity implements CanvasView.Listener, PagePanel.Host, PenPresets.Host {
-    private static final int REQ_IMAGE = 11, REQ_PAGE_IMAGE = 12, REQ_STICKER_IMAGE = 13;
+    private static final int REQ_IMAGE = 11, REQ_PAGE_IMAGE = 12, REQ_STICKER_IMAGE = 13, REQ_TPL_IMAGE = 14, REQ_TPL_PDF = 15;
     /** 올가미 편집 1회 후 돌아갈 도구 (-1 = 없음) */
     private int returnTool = -1;
 
@@ -618,9 +618,9 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
         bar.setElevation(Ui.dp(this, 6));
         bar.setPadding(Ui.dp(this, 10), Ui.dp(this, 4), Ui.dp(this, 10), Ui.dp(this, 4));
         int[] icons = {R.drawable.ic_edit, R.drawable.ic_delete, R.drawable.ic_content_copy, R.drawable.ic_palette, R.drawable.ic_layers,
-                R.drawable.ic_lock, R.drawable.ic_link, R.drawable.ic_link_off, R.drawable.ic_grid_view, R.drawable.ic_title,
+                R.drawable.ic_lock, R.drawable.ic_link, R.drawable.ic_link_off, R.drawable.ic_grid_view,
                 R.drawable.ic_add_reaction, R.drawable.ic_close};
-        String[] labels = {"글자편집", "삭제", "복제", "색상", "레이어로", "고정", "붙이기", "떼기", "양식", "텍스트로", "스티커로", "해제"};
+        String[] labels = {"글자편집", "삭제", "복제", "색상", "레이어로", "고정", "붙이기", "떼기", "양식", "스티커로", "해제"};
         for (int i = 0; i < icons.length; i++) {
             TextView t = Ui.iconButton(this, icons[i], labels[i]);
             Ui.tintIcon(t, 0xFFFFFFFF);
@@ -646,8 +646,7 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
                         Toast.makeText(this, "테이프를 뗐습니다. 이제 따로 움직여요", Toast.LENGTH_SHORT).show();
                         break;
                     case 8: chooseMemoPattern(); break;
-                    case 9: handwritingToText(); break;
-                    case 10: saveSelectionAsSticker(); break;
+                    case 9: saveSelectionAsSticker(); break;
                     default: canvas.clearSelection(); break;
                 }
             });
@@ -684,95 +683,6 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
         new AlertDialog.Builder(this).setTitle("메모지 양식")
                 .setItems(com.kjt.jiannote.model.MemoElem.PATTERN_NAMES, (d, w) -> canvas.setMemoPattern(m, w))
                 .show();
-    }
-
-    /** 선택한 손글씨를 텍스트로 (손글씨는 그대로, 옆에 텍스트 생성) */
-    private void handwritingToText() {
-        java.util.ArrayList<StrokeElem> strokes = canvas.selectedStrokes();
-        android.graphics.RectF near = canvas.selectionBounds();
-        if (strokes.isEmpty() || near == null) {
-            Toast.makeText(this, "올가미로 손글씨를 선택하세요", Toast.LENGTH_SHORT).show();
-            return;
-        }
-        recognizeWith(strokes, near, prefs.s("hwLang", HandwritingRecognizer.KO));
-    }
-
-    private void recognizeWith(java.util.ArrayList<StrokeElem> strokes, android.graphics.RectF near, String lang) {
-        prefs.put("hwLang", lang);
-        LinearLayout box = Ui.row(this);
-        int pd = Ui.dp(this, 24);
-        box.setPadding(pd, pd, pd, pd);
-        box.addView(new android.widget.ProgressBar(this));
-        TextView msg = Ui.label(this, "손글씨를 읽는 중…", 15, Ui.TEXT, false);
-        msg.setPadding(Ui.dp(this, 16), 0, 0, 0);
-        box.addView(msg);
-        AlertDialog pdlg = new AlertDialog.Builder(this).setView(box).setCancelable(true).create();
-        pdlg.show();
-        HandwritingRecognizer.recognize(this, strokes, lang, new HandwritingRecognizer.Cb() {
-            @Override
-            public void ok(String text, float lineHeight) {
-                pdlg.dismiss();
-                showRecognized(strokes, near, lang, text, lineHeight);
-            }
-
-            @Override
-            public void fail(String m) {
-                pdlg.dismiss();
-                // 실패해도 다른 언어로 다시 시도할 수 있게 결과 창을 띄움
-                showRecognized(strokes, near, lang, "", 40);
-                Toast.makeText(EditorActivity.this, m, Toast.LENGTH_LONG).show();
-            }
-
-            @Override
-            public void progress(String m) {
-                msg.setText(m);
-            }
-        });
-    }
-
-    private void showRecognized(java.util.ArrayList<StrokeElem> strokes, android.graphics.RectF near, String lang, String text, float lineHeight) {
-        LinearLayout b = Ui.col(this);
-        int p = Ui.dp(this, 20);
-        b.setPadding(p, Ui.dp(this, 8), p, 0);
-        b.addView(Ui.label(this, "인식 언어 (누르면 다시 인식)", 12, Ui.SUBTEXT, true));
-        LinearLayout langs = Ui.row(this);
-        langs.setPadding(0, Ui.dp(this, 4), 0, Ui.dp(this, 8));
-        b.addView(langs);
-        android.widget.EditText e = new android.widget.EditText(this);
-        e.setText(text);
-        e.setSelection(text.length());
-        b.addView(e);
-        if (HandwritingRecognizer.MATH.equals(lang)) {
-            b.addView(Ui.label(this, "숫자·기호 모드: 숫자와 + − × ÷ = ( ) 같은 기호를 한 줄로 인식해요. 분수·지수 같은 2단 수식은 지원되지 않아요.", 11, Ui.SUBTEXT, false));
-        }
-        AlertDialog[] dlg = new AlertDialog[1];
-        for (int i = 0; i < HandwritingRecognizer.LANGS.length; i++) {
-            String lg = HandwritingRecognizer.LANGS[i];
-            TextView chip = Ui.pill(this, HandwritingRecognizer.LANG_NAMES[i], lg.equals(lang));
-            chip.setTextSize(13);
-            chip.setPadding(Ui.dp(this, 12), Ui.dp(this, 6), Ui.dp(this, 12), Ui.dp(this, 6));
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            lp.setMargins(0, 0, Ui.dp(this, 6), 0);
-            chip.setOnClickListener(v -> {
-                if (lg.equals(lang)) return;
-                dlg[0].dismiss();
-                recognizeWith(strokes, near, lg);
-            });
-            langs.addView(chip, lp);
-        }
-        dlg[0] = new AlertDialog.Builder(this).setTitle("인식 결과 (고칠 수 있어요)").setView(b)
-                .setNegativeButton("취소", null)
-                .setNeutralButton("복사", (d, w) -> {
-                    android.content.ClipboardManager cm = (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-                    cm.setPrimaryClip(android.content.ClipData.newPlainText("JianNote", e.getText().toString()));
-                    Toast.makeText(this, "복사했습니다", Toast.LENGTH_SHORT).show();
-                })
-                .setPositiveButton("텍스트 넣기", (d, w) -> {
-                    String t = e.getText().toString().trim();
-                    if (t.isEmpty()) return;
-                    float size = Math.max(20f, Math.min(120f, lineHeight * 0.7f));
-                    canvas.addTextBeside(near, t, size);
-                }).show();
     }
 
     private void editSelectedText() {
@@ -842,7 +752,7 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
 
     private void addPage() {
         Page cur = canvas.page();
-        canvas.addPage(Page.create(cur.w, cur.h, cur.template), canvas.pageIndex() + 1);
+        canvas.addPage(cur.blankLike(), canvas.pageIndex() + 1);
         if (pagePanel.isOpen()) pagePanel.rebuild();
     }
 
@@ -904,13 +814,85 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
     /** 속지를 이미지로 보면서 선택 */
     private void chooseTemplate() {
         Page cur = canvas.page();
+        if (cur.isInfinite()) {
+            chooseBasicTemplate();
+            return;
+        }
+        java.util.ArrayList<String> items = new java.util.ArrayList<>();
+        items.add("기본 속지 고르기 (줄·모눈·도트 등)");
+        items.add("사진으로 속지 만들기");
+        items.add("PDF로 속지 만들기");
+        if (cur.hasImageTemplate()) items.add("사진·PDF 속지 지우기");
+        new AlertDialog.Builder(this).setTitle("속지 변경")
+                .setItems(items.toArray(new String[0]), (d, w) -> {
+                    switch (w) {
+                        case 0: chooseBasicTemplate(); break;
+                        case 1: pickTemplateFile("image/*", REQ_TPL_IMAGE); break;
+                        case 2: pickTemplateFile("application/pdf", REQ_TPL_PDF); break;
+                        default:
+                            askScope("사진·PDF 속지 지우기", all -> {
+                                for (Page p : all ? doc.pages : java.util.Collections.singletonList(canvas.page())) {
+                                    if (p.hasImageTemplate()) p.bgImage = null;
+                                }
+                                templateChanged();
+                            });
+                    }
+                }).show();
+    }
+
+    private void pickTemplateFile(String mime, int req) {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType(mime);
+        try {
+            startActivityForResult(i, req);
+        } catch (Exception e) {
+            Toast.makeText(this, "파일을 열 수 없습니다", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private interface ScopeCb {
+        void on(boolean allPages);
+    }
+
+    /** 이 페이지만 / 모든 페이지 */
+    private void askScope(String title, ScopeCb cb) {
+        if (canvas.pageCount() <= 1) {
+            cb.on(false);
+            return;
+        }
+        new AlertDialog.Builder(this).setTitle(title)
+                .setItems(new String[]{"이 페이지만", "모든 페이지"}, (d, w) -> cb.on(w == 1))
+                .show();
+    }
+
+    private void applyImageTemplate(String file) {
+        askScope("속지를 적용할 페이지", all -> {
+            for (Page p : all ? doc.pages : java.util.Collections.singletonList(canvas.page())) p.bgImage = file;
+            templateChanged();
+            Toast.makeText(this, "속지를 바꿨습니다. 새로 추가하는 페이지에도 같은 속지가 들어가요", Toast.LENGTH_LONG).show();
+        });
+    }
+
+    private void templateChanged() {
+        dirty = true;
+        canvas.invalidateScene();
+        if (pagePanel.isOpen()) pagePanel.rebuild();
+    }
+
+    private void chooseBasicTemplate() {
+        Page cur = canvas.page();
         boolean land = !cur.isInfinite() && cur.w > cur.h;
         Dialogs.templatePicker(this, premium, meta.paperColor, land, cur.template, !meta.infinite && canvas.pageCount() > 1,
                 (t, all) -> {
                     if (all) {
-                        for (Page p : doc.pages) p.template = t;
+                        for (Page p : doc.pages) {
+                            p.template = t;
+                            if (p.hasImageTemplate()) p.bgImage = null;
+                        }
                     } else {
                         cur.template = t;
+                        if (cur.hasImageTemplate()) cur.bgImage = null;
                     }
                     meta.template = t;
                     dirty = true;
@@ -1471,6 +1453,37 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
     @Override
     protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
+        if (req == REQ_TPL_IMAGE && res == RESULT_OK && data != null && data.getData() != null) {
+            try {
+                applyImageTemplate(ImportExport.templateFromImage(this, data.getData(), rc.imagesDir()));
+            } catch (Exception e) {
+                Toast.makeText(this, "속지 만들기 실패: " + e.getMessage(), Toast.LENGTH_LONG).show();
+            }
+            return;
+        }
+        if (req == REQ_TPL_PDF && res == RESULT_OK && data != null && data.getData() != null) {
+            Uri uri = data.getData();
+            try {
+                int n = ImportExport.pdfPageCount(this, uri);
+                if (n <= 1) {
+                    applyImageTemplate(ImportExport.templateFromPdf(this, uri, 0, rc.imagesDir()));
+                } else {
+                    String[] pages = new String[n];
+                    for (int i = 0; i < n; i++) pages[i] = (i + 1) + "페이지";
+                    new AlertDialog.Builder(this).setTitle("속지로 쓸 PDF 페이지")
+                            .setItems(pages, (d, w) -> {
+                                try {
+                                    applyImageTemplate(ImportExport.templateFromPdf(this, uri, w, rc.imagesDir()));
+                                } catch (Exception e) {
+                                    Toast.makeText(this, "속지 만들기 실패: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                                }
+                            }).show();
+                }
+            } catch (Exception e) {
+                Toast.makeText(this, "PDF를 열 수 없습니다: " + e.getMessage(), Toast.LENGTH_LONG).show();
+            }
+            return;
+        }
         if (req == REQ_STICKER_IMAGE && res == RESULT_OK && data != null && data.getData() != null) {
             try {
                 Stickers.addImage(this, data.getData());

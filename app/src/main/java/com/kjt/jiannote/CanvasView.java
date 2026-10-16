@@ -207,6 +207,8 @@ public class CanvasView extends View {
     private boolean pinching, pinchedThisGesture;
     private float gLastCx, gLastCy, gLastDist;
     private int gMaxPointers;
+    /** 한 손가락 스크롤 방향 고정: 0=미정 1=세로 2=가로 3=자유 */
+    private int axisLock;
     private VelocityTracker velocity;
     private final OverScroller scroller;
     private final int minFling, maxFling;
@@ -754,13 +756,6 @@ public class CanvasView extends View {
         return selBounds == null ? null : new RectF(selBounds);
     }
 
-    /** 선택한 손글씨(형광펜 제외) 획 */
-    public ArrayList<StrokeElem> selectedStrokes() {
-        ArrayList<StrokeElem> out = new ArrayList<>();
-        for (Element e : selection) if (e instanceof StrokeElem && !((StrokeElem) e).isHighlighter()) out.add((StrokeElem) e);
-        return out;
-    }
-
     /** 요소 묶음을 화면 가운데에 넣고 선택 (스티커) */
     public void insertElements(java.util.List<Element> elems) {
         if (elems.isEmpty()) return;
@@ -794,26 +789,6 @@ public class CanvasView extends View {
         changed();
         select(placed);
         if (listener != null) listener.onLongPressSelected();
-    }
-
-    /** 선택 영역 옆에 텍스트 추가 (손글씨 → 텍스트) */
-    public void addTextBeside(RectF near, String text, float size) {
-        TextElem.Style st = textStyle.copy();
-        st.size = size;
-        float x = near.right + 24, y = near.top;
-        Page p = page();
-        TextElem probe = new TextElem(x, y, text, st, 0);
-        if (!p.isInfinite() && probe.bounds().right > p.w - 10) {
-            x = near.left;
-            y = near.bottom + 16;
-        }
-        TextElem t = new TextElem(x, y, text, st, 0);
-        Layer l = activeLayer();
-        ArrayList<Element> before = new ArrayList<>(l.elems);
-        l.elems.add(t);
-        pushElems(l, before);
-        clearSelection();
-        changed();
     }
 
     /** 선택 항목 고정 */
@@ -2024,6 +1999,7 @@ public class CanvasView extends View {
             gestureActive = true;
             gMaxPointers = cnt;
             pinchedThisGesture = false;
+            axisLock = 0;
         } else {
             gMaxPointers = Math.max(gMaxPointers, cnt);
         }
@@ -2041,6 +2017,16 @@ public class CanvasView extends View {
         cy /= cnt;
         float dx = cx - gLastCx, dy = cy - gLastCy;
         if (Math.hypot(cx - downSx, cy - downSy) > 12 * density) movedFar = true;
+        if (cnt < 2 && !isInfinite()) {
+            // 세로 스크롤 중에는 좌우로 흔들리지 않게 방향 고정
+            if (axisLock == 0 && movedFar) {
+                float tdx = Math.abs(cx - downSx), tdy = Math.abs(cy - downSy);
+                axisLock = tdy > tdx * 1.2f ? 1 : tdx > tdy * 1.2f ? 2 : 3;
+            }
+            if (axisLock == 0 || axisLock == 1) dx = 0;
+            else if (axisLock == 2) dy = 0;
+            if (maxPageW * scale <= getWidth()) dx = 0; // 페이지가 화면 폭 안이면 좌우 이동 없음
+        }
         tx += dx;
         ty += dy;
         if (cnt >= 2) {
@@ -2080,6 +2066,10 @@ public class CanvasView extends View {
         if (allowFling && !pinchedThisGesture && velocity != null) {
             velocity.computeCurrentVelocity(1000, maxFling);
             float vx = velocity.getXVelocity(), vy = velocity.getYVelocity();
+            if (!isInfinite()) {
+                if (axisLock == 1 || axisLock == 0 || maxPageW * scale <= getWidth()) vx = 0;
+                else if (axisLock == 2) vy = 0;
+            }
             if (Math.hypot(vx, vy) > minFling * 2) {
                 int[] b = bounds();
                 scroller.fling(Math.round(tx), Math.round(ty), Math.round(vx), Math.round(vy), b[0], b[1], b[2], b[3]);

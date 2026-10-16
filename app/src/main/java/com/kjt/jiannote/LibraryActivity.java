@@ -801,7 +801,9 @@ public class LibraryActivity extends Activity {
                 {R.drawable.ic_touch_app, "손가락으로 넘기기", "한 손가락으로 스크롤, 두 손가락으로 확대·축소합니다. 펜을 대고 있을 때 손바닥은 무시됩니다."},
                 {R.drawable.ic_shapes, "도형 자동 보정", "선을 긋고 펜을 잠깐 멈추면 직선·사각형·원·삼각형으로 반듯하게 바뀝니다."},
                 {R.drawable.ic_layers, "레이어", "그림과 글씨를 레이어로 나눠 숨기고, 순서를 바꾸고, 투명도를 조절하세요."},
-                {R.drawable.ic_picture_as_pdf, "PDF에 필기", "서재의 가져오기 버튼으로 PDF를 불러와 바로 필기할 수 있습니다."}
+                {R.drawable.ic_picture_as_pdf, "PDF에 필기", "서재의 가져오기 버튼으로 PDF·사진을 불러와 바로 필기할 수 있습니다. 페이지 메뉴에서 사진·PDF로 속지도 만들 수 있어요."},
+                {R.drawable.ic_rectangle, "암기 테이프", "외울 곳을 테이프로 가리고, 터치하면 비쳐 보이고 다시 터치하면 가려집니다."},
+                {R.drawable.ic_sticky_note_2, "메모지 · 스티커", "메모지를 붙여 그 위에 쓰고, 스티커 버튼으로 꾸미세요. 필기도 스티커로 저장할 수 있어요."}
         };
         for (Object[] tip : tips) {
             LinearLayout r = Ui.row(this);

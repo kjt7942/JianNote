@@ -23,6 +23,18 @@ public class Page {
         return p;
     }
 
+    /** 사진·PDF 로 만든 속지 이미지인지 (tpl_ 로 시작) */
+    public boolean hasImageTemplate() {
+        return bgImage != null && bgImage.startsWith("tpl_");
+    }
+
+    /** 같은 크기·속지(사진/PDF 속지 포함)의 빈 페이지 */
+    public Page blankLike() {
+        Page p = create(w, h, template);
+        if (hasImageTemplate()) p.bgImage = bgImage;
+        return p;
+    }
+
     public boolean isInfinite() {
         return w <= 0 || h <= 0;
     }
