@@ -3,6 +3,8 @@
 
     <!-- 손글씨 인식 모델(Google ML Kit) 최초 1회 다운로드용 -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- GitHub Releases 자동 업데이트 설치용 -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
         android:allowBackup="true"
@@ -29,5 +31,8 @@
             android:exported="false"
             android:windowSoftInputMode="adjustNothing"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" />
+        <receiver
+            android:name=".Updater$Receiver"
+            android:exported="false" />
     </application>
 </manifest>

@@ -208,6 +208,20 @@ public class LibraryActivity extends Activity {
         Ui.edgeToEdge(this, root);
 
         if (!prefs.b("onboarded", false)) root.post(this::onboarding);
+
+        // 업데이트 완료 안내 + 새 버전 자동 확인
+        long ver = Updater.currentVersion(this);
+        long seen = Long.parseLong(prefs.s("seenVersion", "0"));
+        if (seen != 0 && ver > seen) {
+            String vn = "";
+            try {
+                vn = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+            } catch (Exception ignored) {
+            }
+            Toast.makeText(this, "JianNote " + vn + " 로 업데이트되었습니다", Toast.LENGTH_LONG).show();
+        }
+        prefs.put("seenVersion", String.valueOf(ver));
+        root.postDelayed(() -> Updater.autoCheck(this), 1500);
     }
 
     @Override
@@ -818,6 +832,8 @@ public class LibraryActivity extends Activity {
         boolean finger = prefs.b("fingerDraw", false);
         String[] items = {
                 "☝️  손가락으로 그리기: " + (finger ? "켜짐" : "꺼짐 (S펜 전용)"),
+                "🔄  업데이트 확인",
+                "⚙️  자동 업데이트: " + (Updater.autoEnabled(this) ? "켜짐" : "꺼짐"),
                 "💾  모든 노트 백업하기",
                 "📥  백업 파일 가져오기",
                 "📖  사용 방법",
@@ -833,17 +849,24 @@ public class LibraryActivity extends Activity {
                             prefs.put("fingerDraw", !finger);
                             Toast.makeText(this, !finger ? "손가락 필기를 켰습니다" : "S펜으로만 필기합니다 (손가락은 스크롤/확대)", Toast.LENGTH_SHORT).show();
                             break;
-                        case 1: backupAll(); break;
-                        case 2: pickBackup(); break;
-                        case 3: onboarding(); break;
-                        case 4:
+                        case 1: Updater.check(this, true); break;
+                        case 2: {
+                            boolean on = !Updater.autoEnabled(this);
+                            Updater.setAuto(this, on);
+                            Toast.makeText(this, on ? "새 버전이 나오면 자동으로 받아 설치합니다" : "자동 업데이트를 껐습니다", Toast.LENGTH_SHORT).show();
+                            break;
+                        }
+                        case 3: backupAll(); break;
+                        case 4: pickBackup(); break;
+                        case 5: onboarding(); break;
+                        case 6:
                             try {
                                 startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(PRIVACY_URL)));
                             } catch (Exception e) {
                                 Toast.makeText(this, PRIVACY_URL, Toast.LENGTH_LONG).show();
                             }
                             break;
-                        case 5: licenses(); break;
+                        case 7: licenses(); break;
                         default: about(); break;
                     }
                 })
