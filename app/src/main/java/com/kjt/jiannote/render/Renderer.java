@@ -35,18 +35,28 @@ public class Renderer {
             c.save();
             c.clipRect(0, 0, p.w, p.h);
         }
-        for (Layer l : p.layers) {
-            if (!l.visible || l.alpha <= 0) continue;
-            int save = -1;
-            if (l.alpha < 255) save = c.saveLayerAlpha(vis, l.alpha);
-            for (Element e : l.elems) {
-                if (excluded != null && excluded.contains(e)) continue;
-                if (vis != null && !RectF.intersects(vis, e.bounds())) continue;
-                e.draw(c, rc);
+        // 그리는 순서: 0) 이미지·메모지  1) 형광펜(글씨 뒤)  2) 나머지(글씨·펜·테이프 등)
+        for (int pass = 0; pass < 3; pass++) {
+            for (Layer l : p.layers) {
+                if (!l.visible || l.alpha <= 0) continue;
+                int save = -1;
+                for (Element e : l.elems) {
+                    if (passOf(e) != pass) continue;
+                    if (excluded != null && excluded.contains(e)) continue;
+                    if (vis != null && !RectF.intersects(vis, e.bounds())) continue;
+                    if (save < 0 && l.alpha < 255) save = c.saveLayerAlpha(vis, l.alpha);
+                    e.draw(c, rc);
+                }
+                if (save >= 0) c.restoreToCount(save);
             }
-            if (save >= 0) c.restoreToCount(save);
         }
         if (!p.isInfinite()) c.restore();
+    }
+
+    private static int passOf(Element e) {
+        if (e instanceof com.kjt.jiannote.model.ImageElem || e instanceof com.kjt.jiannote.model.MemoElem) return 0;
+        if (e instanceof com.kjt.jiannote.model.StrokeElem && ((com.kjt.jiannote.model.StrokeElem) e).isHighlighter()) return 1;
+        return 2;
     }
 
     public static RectF contentBounds(Page p) {
