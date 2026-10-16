@@ -172,6 +172,18 @@ public class Dialogs {
             });
         }
 
+        TextView customPaper = plusChip(a);
+        paperRow.addView(customPaper, new LinearLayout.LayoutParams(Ui.dp(a, 40), Ui.dp(a, 40)));
+        customPaper.setOnClickListener(v -> ColorPicker.show(a, m.paperColor, false, c -> {
+            m.paperColor = c | 0xFF000000;
+            for (Ui.Swatch o : paperSw) o.setChosen(false);
+            customPaper.setBackground(Ui.roundStroke(m.paperColor, Ui.dp(a, 20), Ui.ACCENT, Ui.dp(a, 2)));
+            for (TemplateChip ch : chipList) {
+                ch.paper = m.paperColor;
+                ch.invalidate();
+            }
+        }));
+
         root.addView(section(a, "표지 색"));
         HorizontalScrollView hs2 = new HorizontalScrollView(a);
         LinearLayout coverRow = Ui.row(a);
@@ -188,6 +200,15 @@ public class Dialogs {
                 for (Ui.Swatch o : coverSw) o.setChosen(o == s);
             });
         }
+
+        TextView customCover = plusChip(a);
+        coverRow.addView(customCover, new LinearLayout.LayoutParams(Ui.dp(a, 40), Ui.dp(a, 40)));
+        customCover.setOnClickListener(v -> ColorPicker.show(a, m.coverColor, false, c -> {
+            m.coverColor = c | 0xFF000000;
+            for (Ui.Swatch o : coverSw) o.setChosen(false);
+            customCover.setBackground(Ui.roundStroke(m.coverColor, Ui.dp(a, 20), Ui.ACCENT, Ui.dp(a, 2)));
+        }));
+        root.addView(Ui.label(a, "표지 이미지는 서재에서 노트를 길게 눌러 '표지 이미지 설정'으로 바꿀 수 있어요.", 11, Ui.SUBTEXT, false));
 
         ori.setOnCheckedChangeListener((g, id) -> {
             for (TemplateChip ch : chipList) {
@@ -328,7 +349,7 @@ public class Dialogs {
         LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         clp.topMargin = Ui.dp(a, 8);
         root.addView(custom, clp);
-        custom.setOnClickListener(v -> ColorPicker.show(a, chosen[0], c -> {
+        custom.setOnClickListener(v -> ColorPicker.show(a, chosen[0], false, c -> {
             if (dlg[0] != null) dlg[0].dismiss();
             cb.on(c);
         }));
@@ -338,6 +359,17 @@ public class Dialogs {
                 .setNegativeButton("취소", null)
                 .setPositiveButton("적용", (d, w) -> cb.on(chosen[0]))
                 .show();
+    }
+
+    /** ＋ 모양 (직접 색 만들기) 버튼 */
+    private static TextView plusChip(Context c) {
+        TextView t = new TextView(c);
+        t.setText("＋");
+        t.setTextSize(18);
+        t.setGravity(Gravity.CENTER);
+        t.setTextColor(Ui.SUBTEXT);
+        t.setBackground(Ui.roundStroke(0xFFFFFFFF, Ui.dp(c, 20), 0x33000000, Ui.dp(c, 1)));
+        return t;
     }
 
     private static TextView section(Context c, String s) {

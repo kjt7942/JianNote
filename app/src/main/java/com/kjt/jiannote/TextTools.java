@@ -164,33 +164,35 @@ public class TextTools {
             onChange.run();
         }));
 
-        // ---- 배경
+        // ---- 배경 (형광 강조): 팔레트 + 투명도
         box.addView(section(a, "배경 (형광 강조)"));
-        LinearLayout bgRow = Ui.row(a);
-        ArrayList<View> bgViews = new ArrayList<>();
-        for (int col : BG_COLORS) {
-            View v;
-            if (col == 0) {
-                TextView none = new TextView(a);
-                none.setText("없음");
-                none.setTextSize(11);
-                none.setGravity(Gravity.CENTER);
-                none.setTextColor(Ui.SUBTEXT);
-                v = none;
-            } else {
-                v = new Ui.Swatch(a, col | 0xFF000000);
-                ((Ui.Swatch) v).setAlpha((col >>> 24) == 0xFF ? 1f : 0.75f);
-            }
-            bgViews.add(v);
-            markBg(a, v, st.bg == col);
-            v.setOnClickListener(x -> {
-                st.bg = col;
-                for (int j = 0; j < bgViews.size(); j++) markBg(a, bgViews.get(j), BG_COLORS[j] == col);
+        LinearLayout bgTop = Ui.row(a);
+        TextView none = Ui.pill(a, "배경 없음", st.bg == 0);
+        bgTop.addView(none);
+        box.addView(bgTop);
+        final int[] bgAlpha = {st.bg == 0 ? 0x66 : Color.alpha(st.bg)};
+        TextView alLabel = Ui.label(a, "배경 투명도: " + Math.round(bgAlpha[0] * 100 / 255f) + "%", 12, Ui.SUBTEXT, false);
+        SeekBar alBar = Ui.seek(a, 90, Math.round(bgAlpha[0] * 100 / 255f) - 10, v -> {
+            bgAlpha[0] = Math.round((v + 10) * 255 / 100f);
+            alLabel.setText("배경 투명도: " + (v + 10) + "%");
+            if (st.bg != 0) {
+                st.bg = ColorPicker.withA(st.bg, bgAlpha[0]);
                 onChange.run();
-            });
-            bgRow.addView(v, new LinearLayout.LayoutParams(Ui.dp(a, 40), Ui.dp(a, 40)));
-        }
-        box.addView(bgRow);
+            }
+        });
+        box.addView(ColorPicker.grid(a, new int[]{0xFFFFEB3B, 0xFFFF8A80, 0xFF80D8FF, 0xFFA5D6A7, 0xFFB39DDB, 0xFFFFCC80, 0xFFFFFFFF, 0xFF1F1F24},
+                st.bg | 0xFF000000, c -> {
+                    st.bg = ColorPicker.withA(c, bgAlpha[0]);
+                    markPill(a, none, false);
+                    onChange.run();
+                }));
+        box.addView(alLabel);
+        box.addView(alBar);
+        none.setOnClickListener(v -> {
+            st.bg = 0;
+            markPill(a, none, true);
+            onChange.run();
+        });
         return box;
     }
 

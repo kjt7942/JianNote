@@ -178,14 +178,24 @@ public class ColorPicker {
         }
     }
 
+    public static int withA(int c, int a) {
+        return (c & 0x00FFFFFF) | (a << 24);
+    }
+
     public static String hex(int c) {
         return String.format(Locale.ROOT, "#%06X", c & 0xFFFFFF);
     }
 
     // ================= 대화상자 =================
 
-    /** 색상 선택 대화상자. 선택한 색은 자동으로 "내 팔레트"에 저장된다. */
+    /** 색상 선택 대화상자. 선택한 색은 자동으로 "내 팔레트"에 저장된다. (투명도 포함) */
     public static void show(Activity a, int initial, Ui.IntCb cb) {
+        show(a, initial, true, cb);
+    }
+
+    public static void show(Activity a, int initial, boolean withAlpha, Ui.IntCb cb) {
+        final int[] alpha = {withAlpha ? Color.alpha(initial) : 255};
+        if (alpha[0] == 0) alpha[0] = 255;
         LinearLayout box = Ui.col(a);
         int pad = Ui.dp(a, 18);
         box.setPadding(pad, Ui.dp(a, 6), pad, 0);
@@ -196,7 +206,7 @@ public class ColorPicker {
         LinearLayout row = Ui.row(a);
         row.setPadding(0, Ui.dp(a, 14), 0, Ui.dp(a, 4));
         View preview = new View(a);
-        preview.setBackground(Ui.round(initial, Ui.dp(a, 8)));
+        preview.setBackground(Ui.round(withA(initial, alpha[0]), Ui.dp(a, 8)));
         row.addView(preview, new LinearLayout.LayoutParams(0, Ui.dp(a, 46), 1f));
         EditText hexField = new EditText(a);
         hexField.setText(hex(initial));
@@ -210,9 +220,22 @@ public class ColorPicker {
         row.addView(hexField, hlp);
         box.addView(row);
 
+        // 투명도
+        TextView al = Ui.label(a, "투명도: " + Math.round(alpha[0] * 100 / 255f) + "%", 12, Ui.SUBTEXT, true);
+        al.setPadding(0, Ui.dp(a, 8), 0, 0);
+        android.widget.SeekBar alphaBar = Ui.seek(a, 90, Math.round(alpha[0] * 100 / 255f) - 10, v -> {
+            alpha[0] = Math.round((v + 10) * 255 / 100f);
+            al.setText("투명도: " + (v + 10) + "%");
+            preview.setBackground(Ui.round(withA(picker.color(), alpha[0]), Ui.dp(a, 8)));
+        });
+        if (withAlpha) {
+            box.addView(al);
+            box.addView(alphaBar);
+        }
+
         final boolean[] fromHex = {false};
         picker.setListener(c -> {
-            preview.setBackground(Ui.round(c, Ui.dp(a, 8)));
+            preview.setBackground(Ui.round(withA(c, alpha[0]), Ui.dp(a, 8)));
             if (!fromHex[0]) {
                 fromHex[0] = true;
                 hexField.setText(hex(c));
@@ -237,7 +260,7 @@ public class ColorPicker {
                         int col = 0xFF000000 | Integer.parseInt(t, 16);
                         fromHex[0] = true;
                         picker.setColor(col);
-                        preview.setBackground(Ui.round(col, Ui.dp(a, 8)));
+                        preview.setBackground(Ui.round(withA(col, alpha[0]), Ui.dp(a, 8)));
                         fromHex[0] = false;
                     } catch (NumberFormatException ignored) {
                     }
@@ -263,8 +286,13 @@ public class ColorPicker {
             for (int col : list) {
                 Ui.Swatch s = new Ui.Swatch(a, col);
                 s.setOnClickListener(v -> {
-                    picker.setColor(col);
-                    preview.setBackground(Ui.round(col, Ui.dp(a, 8)));
+                    if (withAlpha) {
+                        alpha[0] = Color.alpha(col) == 0 ? 255 : Color.alpha(col);
+                        alphaBar.setProgress(Math.round(alpha[0] * 100 / 255f) - 10);
+                        al.setText("투명도: " + Math.round(alpha[0] * 100 / 255f) + "%");
+                    }
+                    picker.setColor(col | 0xFF000000);
+                    preview.setBackground(Ui.round(withA(col, alpha[0]), Ui.dp(a, 8)));
                     hexField.setText(hex(col));
                 });
                 s.setOnLongClickListener(v -> {
@@ -289,7 +317,7 @@ public class ColorPicker {
             Ui.Swatch s = new Ui.Swatch(a, col);
             s.setOnClickListener(v -> {
                 picker.setColor(col);
-                preview.setBackground(Ui.round(col, Ui.dp(a, 8)));
+                preview.setBackground(Ui.round(withA(col, alpha[0]), Ui.dp(a, 8)));
                 hexField.setText(hex(col));
             });
             GridLayout.LayoutParams lp = new GridLayout.LayoutParams();
@@ -306,7 +334,7 @@ public class ColorPicker {
                 .setView(sv)
                 .setNegativeButton("취소", null)
                 .setPositiveButton("선택", (dlg, w) -> {
-                    int c = picker.color();
+                    int c = withA(picker.color(), alpha[0]);
                     Palette.add(a, c);
                     cb.on(c);
                 })

@@ -7,8 +7,16 @@ public class ShapeRecognizer {
     public static final int LINE = 0, ARROW = 1, RECT = 2, ELLIPSE = 3, TRIANGLE = 4;
     public static final String[] NAMES = {"직선", "화살표", "사각형", "원", "삼각형"};
 
+    /** 마지막으로 인식된 도형 종류 (-1 = 곡선 보정) */
+    public static int lastType = -1;
+
     public static StrokeElem build(int type, float x0, float y0, float x1, float y1, int color, float w) {
-        StrokeElem s = new StrokeElem(StrokeElem.PEN, color);
+        return build(type, x0, y0, x1, y1, new StrokeElem(StrokeElem.PEN, color), w);
+    }
+
+    /** template 의 펜 종류·색·끝 모양을 그대로 쓰는 도형 */
+    public static StrokeElem build(int type, float x0, float y0, float x1, float y1, StrokeElem template, float w) {
+        StrokeElem s = template.blank();
         switch (type) {
             case LINE:
                 seg(s, x0, y0, x1, y1, w, true);
@@ -34,7 +42,7 @@ public class ShapeRecognizer {
             }
             case ELLIPSE: {
                 float cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, rx = Math.abs(x1 - x0) / 2, ry = Math.abs(y1 - y0) / 2;
-                int steps = (int) Math.max(24, Math.min(240, (rx + ry) / 3));
+                int steps = (int) Math.max(72, Math.min(720, (rx + ry) * 0.8f));
                 for (int i = 0; i <= steps; i++) {
                     double a = 2 * Math.PI * i / steps;
                     s.add((float) (cx + rx * Math.cos(a)), (float) (cy + ry * Math.sin(a)), w);
@@ -56,7 +64,7 @@ public class ShapeRecognizer {
 
     private static void seg(StrokeElem s, float x0, float y0, float x1, float y1, float w, boolean includeStart) {
         float len = (float) Math.hypot(x1 - x0, y1 - y0);
-        int steps = Math.max(1, (int) (len / 4));
+        int steps = Math.max(1, (int) (len / 2.5f));
         for (int i = includeStart ? 0 : 1; i <= steps; i++) {
             float t = (float) i / steps;
             s.add(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, w);
@@ -84,7 +92,8 @@ public class ShapeRecognizer {
         float chord = (float) Math.hypot(lx - fx, ly - fy);
 
         if (chord > 0.9f * len) {
-            return build(LINE, fx, fy, lx, ly, color, w);
+            lastType = LINE;
+            return build(LINE, fx, fy, lx, ly, src, w);
         }
         if (chord < 0.3f * diag) {
             // 닫힌 도형: 면적 비율로 판별
@@ -96,9 +105,18 @@ public class ShapeRecognizer {
             area = Math.abs(area) / 2;
             double ratio = area / Math.max(1, bw * bh);
             if (bw < 10 || bh < 10) return null;
-            if (ratio > 0.86) return build(RECT, l, t, r, b, color, w);
-            if (ratio > 0.64) return build(ELLIPSE, l, t, r, b, color, w);
-            if (ratio > 0.35) return triangle(src, color, w);
+            if (ratio > 0.86) {
+                lastType = RECT;
+                return build(RECT, l, t, r, b, src, w);
+            }
+            if (ratio > 0.64) {
+                lastType = ELLIPSE;
+                return build(ELLIPSE, l, t, r, b, src, w);
+            }
+            if (ratio > 0.35) {
+                lastType = TRIANGLE;
+                return triangle(src, color, w);
+            }
         }
         return null;
     }
@@ -127,7 +145,7 @@ public class ShapeRecognizer {
             float d = StrokeElem.segDist(p[3 * i], p[3 * i + 1], p[3 * a], p[3 * a + 1], p[3 * bIdx], p[3 * bIdx + 1]);
             if (d > best) { best = d; c = i; }
         }
-        StrokeElem s = new StrokeElem(StrokeElem.PEN, color);
+        StrokeElem s = src.blank();
         float ax = p[3 * a], ay = p[3 * a + 1], bx = p[3 * bIdx], by = p[3 * bIdx + 1], qx = p[3 * c], qy = p[3 * c + 1];
         seg(s, ax, ay, bx, by, w, true);
         seg(s, bx, by, qx, qy, w, false);

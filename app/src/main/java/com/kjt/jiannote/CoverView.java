@@ -16,6 +16,7 @@ import com.kjt.jiannote.render.Paper;
 public class CoverView extends View {
     private NotebookMeta meta;
     private Bitmap thumb;
+    private Bitmap coverImg;
     private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint bmp = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG);
     private final RectF r = new RectF();
@@ -25,8 +26,13 @@ public class CoverView extends View {
     }
 
     public void bind(NotebookMeta m, Bitmap thumb) {
+        bind(m, thumb, null);
+    }
+
+    public void bind(NotebookMeta m, Bitmap thumb, Bitmap coverImg) {
         this.meta = m;
         this.thumb = thumb;
+        this.coverImg = coverImg;
         invalidate();
     }
 
@@ -51,12 +57,28 @@ public class CoverView extends View {
         p.setColor(meta.coverColor);
         r.set(pad, pad, w - pad, h - pad);
         c.drawRoundRect(r, 10 * d, 10 * d, p);
+        float il = pad + 24 * d, it = pad + 16 * d, ir = w - pad - 12 * d, ib = h - pad - 16 * d;
+        RectF inner = new RectF(il, it, ir, ib);
+        if (coverImg != null) {
+            // 사용자 이미지 표지: 표지 전체를 채우도록 가운데 맞춰 자르기
+            c.save();
+            android.graphics.Path clip = new android.graphics.Path();
+            clip.addRoundRect(r, 10 * d, 10 * d, android.graphics.Path.Direction.CW);
+            c.clipPath(clip);
+            float sc = Math.max(r.width() / coverImg.getWidth(), r.height() / coverImg.getHeight());
+            float cw = coverImg.getWidth() * sc, ch = coverImg.getHeight() * sc;
+            c.drawBitmap(coverImg, null, new RectF(r.centerX() - cw / 2, r.centerY() - ch / 2, r.centerX() + cw / 2, r.centerY() + ch / 2), bmp);
+            c.restore();
+            p.setColor(0x33000000);
+            c.drawRect(pad + 10 * d, pad, pad + 14 * d, h - pad, p);
+            drawTitle(c, d, il, ib - 40 * d, ir);
+            drawBadge(c, d, w, h, pad);
+            return;
+        }
         // 책등
         p.setColor(0x33000000);
         c.drawRect(pad + 10 * d, pad, pad + 14 * d, h - pad, p);
         // 속지 미리보기
-        float il = pad + 24 * d, it = pad + 16 * d, ir = w - pad - 12 * d, ib = h - pad - 16 * d;
-        RectF inner = new RectF(il, it, ir, ib);
         p.setColor(meta.paperColor);
         c.drawRoundRect(inner, 4 * d, 4 * d, p);
         if (thumb != null) {
@@ -68,10 +90,13 @@ public class CoverView extends View {
             c.drawBitmap(thumb, null, dst, bmp);
             c.restore();
         }
-        // 제목 라벨
-        p.setColor(Color.WHITE);
+        drawTitle(c, d, il, it + 10 * d, ir);
+        drawBadge(c, d, w, h, pad);
+    }
+
+    private void drawTitle(Canvas c, float d, float il, float top, float ir) {
         float lh = 30 * d;
-        RectF label = new RectF(il + 6 * d, it + 10 * d, ir - 6 * d, it + 10 * d + lh);
+        RectF label = new RectF(il + 6 * d, top, ir - 6 * d, top + lh);
         p.setColor(0xEEFFFFFF);
         c.drawRoundRect(label, 6 * d, 6 * d, p);
         p.setColor(0xFF222222);
@@ -86,6 +111,9 @@ public class CoverView extends View {
         p.setTextAlign(Paint.Align.CENTER);
         c.drawText(t, label.centerX(), label.centerY() + 4.5f * d, p);
         p.setTextAlign(Paint.Align.LEFT);
+    }
+
+    private void drawBadge(Canvas c, float d, float w, float h, float pad) {
         // 뱃지
         if (meta.infinite || meta.favorite) {
             String badge = (meta.favorite ? "★" : "") + (meta.infinite ? " ∞" : "");

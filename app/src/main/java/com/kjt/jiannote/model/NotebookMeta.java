@@ -15,6 +15,10 @@ public class NotebookMeta {
     public long created;
     public long modified;
     public int pageCount = 1;
+    /** 분류(카테고리) 이름, "" = 미분류 */
+    public String category = "";
+    /** 표지에 사용자 이미지(cover.jpg) 사용 */
+    public boolean coverImage;
 
     public JSONObject toJson() throws JSONException {
         JSONObject o = new JSONObject();
@@ -29,6 +33,8 @@ public class NotebookMeta {
         o.put("created", created);
         o.put("modified", modified);
         o.put("pages", pageCount);
+        o.put("category", category);
+        o.put("coverImage", coverImage);
         return o;
     }
 
@@ -45,6 +51,8 @@ public class NotebookMeta {
         m.created = o.optLong("created", System.currentTimeMillis());
         m.modified = o.optLong("modified", m.created);
         m.pageCount = o.optInt("pages", 1);
+        m.category = o.optString("category", "");
+        m.coverImage = o.optBoolean("coverImage", false);
         return m;
     }
 

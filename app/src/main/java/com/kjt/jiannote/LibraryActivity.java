@@ -37,7 +37,8 @@ import java.util.Locale;
 
 /** 서재 (노트북 목록) */
 public class LibraryActivity extends Activity {
-    private static final int REQ_PDF = 21, REQ_BACKUP = 22;
+    private static final int REQ_PDF = 21, REQ_BACKUP = 22, REQ_IMAGES = 23, REQ_COVER = 24;
+    private static final String CAT_ALL = "__all__", CAT_FAV = "__fav__", CAT_NONE = "__none__";
     public static final String PRIVACY_URL = "https://github.com/kjt7942/JianNote/blob/main/PRIVACY.md";
 
     private Store store;
@@ -54,6 +55,9 @@ public class LibraryActivity extends Activity {
     private TextView emptyText;
     private TextView countLabel;
     private String query = "";
+    private LinearLayout catRow;
+    private String category = CAT_ALL;
+    private NotebookMeta coverTarget;
 
     @Override
     protected void onCreate(Bundle b) {
@@ -144,8 +148,17 @@ public class LibraryActivity extends Activity {
         bnlp.setMargins(p, Ui.dp(this, 4), p, Ui.dp(this, 4));
         root.addView(banner, bnlp);
 
+        // ---- 분류(카테고리) 탭
+        android.widget.HorizontalScrollView chs = new android.widget.HorizontalScrollView(this);
+        chs.setHorizontalScrollBarEnabled(false);
+        catRow = Ui.row(this);
+        catRow.setPadding(p, Ui.dp(this, 6), p, Ui.dp(this, 2));
+        chs.addView(catRow);
+        root.addView(chs);
+        category = prefs.s("cat", CAT_ALL);
+
         countLabel = Ui.label(this, "", 13, Ui.SUBTEXT, true);
-        countLabel.setPadding(p, Ui.dp(this, 10), p, 0);
+        countLabel.setPadding(p, Ui.dp(this, 8), p, 0);
         root.addView(countLabel);
 
         // ---- 목록
@@ -223,23 +236,178 @@ public class LibraryActivity extends Activity {
         thumbs.clear();
         badge.setVisibility(View.GONE);
         banner.setVisibility(View.GONE);
+        buildCategoryRow();
         filter();
+    }
+
+    // ================= 분류 =================
+
+    private ArrayList<String> categories() {
+        ArrayList<String> out = new ArrayList<>();
+        for (String c : prefs.s("categories", "").split("\n")) if (!c.trim().isEmpty() && !out.contains(c)) out.add(c);
+        for (NotebookMeta m : all) if (!m.category.isEmpty() && !out.contains(m.category)) out.add(m.category);
+        return out;
+    }
+
+    private void saveCategories(ArrayList<String> cats) {
+        prefs.put("categories", android.text.TextUtils.join("\n", cats));
+    }
+
+    private boolean inCategory(NotebookMeta m) {
+        switch (category) {
+            case CAT_ALL: return true;
+            case CAT_FAV: return m.favorite;
+            case CAT_NONE: return m.category.isEmpty();
+            default: return category.equals(m.category);
+        }
+    }
+
+    private String categoryLabel() {
+        switch (category) {
+            case CAT_ALL: return "모든 노트";
+            case CAT_FAV: return "즐겨찾기";
+            case CAT_NONE: return "미분류";
+            default: return category;
+        }
+    }
+
+    private void buildCategoryRow() {
+        catRow.removeAllViews();
+        ArrayList<String> cats = categories();
+        if (!category.equals(CAT_ALL) && !category.equals(CAT_FAV) && !category.equals(CAT_NONE) && !cats.contains(category)) {
+            category = CAT_ALL;
+        }
+        addChip("전체", CAT_ALL, false);
+        addChip("★ 즐겨찾기", CAT_FAV, false);
+        for (String c : cats) addChip(c, c, true);
+        if (!cats.isEmpty()) addChip("미분류", CAT_NONE, false);
+        TextView add = Ui.pill(this, "＋ 분류", false);
+        add.setTextSize(13);
+        add.setPadding(Ui.dp(this, 14), Ui.dp(this, 7), Ui.dp(this, 14), Ui.dp(this, 7));
+        add.setOnClickListener(v -> Dialogs.input(this, "새 분류 이름", "", false, name -> {
+            name = name.trim();
+            if (name.isEmpty()) return;
+            ArrayList<String> list = categories();
+            if (!list.contains(name)) list.add(name);
+            saveCategories(list);
+            setCategory(name);
+        }));
+        catRow.addView(add);
+    }
+
+    private void addChip(String label, String key, boolean editable) {
+        TextView t = Ui.pill(this, label, key.equals(category));
+        t.setTextSize(13);
+        t.setPadding(Ui.dp(this, 14), Ui.dp(this, 7), Ui.dp(this, 14), Ui.dp(this, 7));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.setMargins(0, 0, Ui.dp(this, 8), 0);
+        t.setOnClickListener(v -> setCategory(key));
+        if (editable) {
+            t.setOnLongClickListener(v -> {
+                categoryMenu(v, key);
+                return true;
+            });
+        }
+        catRow.addView(t, lp);
+    }
+
+    private void setCategory(String key) {
+        category = key;
+        prefs.put("cat", key);
+        buildCategoryRow();
+        filter();
+    }
+
+    private void categoryMenu(View anchor, String cat) {
+        PopupMenu pm = new PopupMenu(this, anchor);
+        pm.getMenu().add(0, 1, 0, "분류 이름 바꾸기");
+        pm.getMenu().add(0, 2, 1, "분류 삭제 (노트는 미분류로)");
+        pm.setOnMenuItemClickListener(item -> {
+            if (item.getItemId() == 1) {
+                Dialogs.input(this, "분류 이름", cat, false, name -> {
+                    name = name.trim();
+                    if (name.isEmpty() || name.equals(cat)) return;
+                    ArrayList<String> list = categories();
+                    int i = list.indexOf(cat);
+                    if (list.contains(name)) list.remove(cat);
+                    else if (i >= 0) list.set(i, name);
+                    saveCategories(list);
+                    for (NotebookMeta m : all) if (cat.equals(m.category)) {
+                        m.category = name;
+                        try {
+                            store.saveMeta(m);
+                        } catch (Exception ignored) {
+                        }
+                    }
+                    if (cat.equals(category)) category = name;
+                    prefs.put("cat", category);
+                    refresh();
+                });
+            } else {
+                new AlertDialog.Builder(this).setTitle("분류 삭제")
+                        .setMessage("'" + cat + "' 분류를 삭제할까요?\n노트는 삭제되지 않고 미분류로 옮겨집니다.")
+                        .setNegativeButton("취소", null)
+                        .setPositiveButton("삭제", (d, w) -> {
+                            ArrayList<String> list = categories();
+                            list.remove(cat);
+                            saveCategories(list);
+                            for (NotebookMeta m : all) if (cat.equals(m.category)) {
+                                m.category = "";
+                                try {
+                                    store.saveMeta(m);
+                                } catch (Exception ignored) {
+                                }
+                            }
+                            if (cat.equals(category)) category = CAT_ALL;
+                            prefs.put("cat", category);
+                            refresh();
+                        }).show();
+            }
+            return true;
+        });
+        pm.show();
+    }
+
+    private void chooseCategory(NotebookMeta m) {
+        ArrayList<String> cats = categories();
+        String[] items = new String[cats.size() + 2];
+        items[0] = (m.category.isEmpty() ? "✓  " : "     ") + "미분류";
+        for (int i = 0; i < cats.size(); i++) items[i + 1] = (cats.get(i).equals(m.category) ? "✓  " : "     ") + cats.get(i);
+        items[items.length - 1] = "＋ 새 분류 만들기";
+        new AlertDialog.Builder(this).setTitle("'" + m.title + "' 분류")
+                .setItems(items, (d, w) -> {
+                    if (w == items.length - 1) {
+                        Dialogs.input(this, "새 분류 이름", "", false, name -> {
+                            name = name.trim();
+                            if (name.isEmpty()) return;
+                            ArrayList<String> list = categories();
+                            if (!list.contains(name)) list.add(name);
+                            saveCategories(list);
+                            m.category = name;
+                            save(m);
+                        });
+                    } else {
+                        m.category = w == 0 ? "" : cats.get(w - 1);
+                        save(m);
+                    }
+                }).show();
     }
 
     private void filter() {
         shown.clear();
         for (NotebookMeta m : all) {
+            if (!inCategory(m)) continue;
             if (query.isEmpty() || m.title.toLowerCase(Locale.ROOT).contains(query)) shown.add(m);
         }
         String[] sortNames = {"최근 수정순", "이름순", "만든 날짜순"};
-        countLabel.setText((query.isEmpty() ? "모든 노트 " : "검색 결과 ") + shown.size() + "  ·  " + sortNames[prefs.i("sort", 0)]);
+        countLabel.setText((query.isEmpty() ? categoryLabel() + " " : "검색 결과 ") + shown.size() + "  ·  " + sortNames[prefs.i("sort", 0)]);
         if (all.isEmpty()) {
             empty.setVisibility(View.VISIBLE);
             emptyText.setText("아직 노트가 없습니다\nS펜으로 첫 노트를 시작해 보세요");
             empty.getChildAt(2).setVisibility(View.VISIBLE);
         } else if (shown.isEmpty()) {
             empty.setVisibility(View.VISIBLE);
-            emptyText.setText("'" + query + "' 검색 결과가 없습니다");
+            emptyText.setText(query.isEmpty() ? "'" + categoryLabel() + "'에 노트가 없습니다" : "'" + query + "' 검색 결과가 없습니다");
             empty.getChildAt(2).setVisibility(View.GONE);
         } else {
             empty.setVisibility(View.GONE);
@@ -258,6 +426,8 @@ public class LibraryActivity extends Activity {
     private void createNotebook() {
         if (!checkLimit()) return;
         Dialogs.newNotebook(this, premium, m -> {
+            if (!category.equals(CAT_ALL) && !category.equals(CAT_FAV) && !category.equals(CAT_NONE)) m.category = category;
+            if (category.equals(CAT_FAV)) m.favorite = true;
             try {
                 open(store.create(m));
             } catch (Exception e) {
@@ -289,11 +459,13 @@ public class LibraryActivity extends Activity {
     private void importMenu(View anchor) {
         PopupMenu pm = new PopupMenu(this, anchor);
         pm.getMenu().add(0, 1, 0, "PDF 가져오기 (필기용)");
-        pm.getMenu().add(0, 2, 1, "백업 파일(.jnote) 가져오기");
-        pm.getMenu().add(0, 3, 2, "모든 노트 백업하기");
+        pm.getMenu().add(0, 4, 1, "이미지 가져오기 (페이지로)");
+        pm.getMenu().add(0, 2, 2, "백업 파일(.jnote) 가져오기");
+        pm.getMenu().add(0, 3, 3, "모든 노트 백업하기");
         pm.setOnMenuItemClickListener(item -> {
             switch (item.getItemId()) {
                 case 1: pickPdf(); break;
+                case 4: pickImages(); break;
                 case 2: pickBackup(); break;
                 default: backupAll(); break;
             }
@@ -310,6 +482,14 @@ public class LibraryActivity extends Activity {
         i.addCategory(Intent.CATEGORY_OPENABLE);
         i.setType("application/pdf");
         startActivityForResult(i, REQ_PDF);
+    }
+
+    private void pickImages() {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("image/*");
+        i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        startActivityForResult(i, REQ_IMAGES);
     }
 
     private void pickBackup() {
@@ -378,8 +558,56 @@ public class LibraryActivity extends Activity {
     @Override
     protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
-        if (res != RESULT_OK || data == null || data.getData() == null) return;
+        if (res != RESULT_OK || data == null) return;
+        if (req == REQ_IMAGES) {
+            ArrayList<Uri> uris = new ArrayList<>();
+            if (data.getClipData() != null) {
+                for (int i = 0; i < data.getClipData().getItemCount(); i++) uris.add(data.getClipData().getItemAt(i).getUri());
+            } else if (data.getData() != null) {
+                uris.add(data.getData());
+            }
+            if (uris.isEmpty()) return;
+            AlertDialog pd = progress("이미지를 페이지로 가져오는 중…");
+            TextView msg = pd.getWindow().getDecorView().findViewWithTag("msg");
+            String title = uris.size() == 1 ? displayName(uris.get(0)) : "이미지 노트 (" + uris.size() + "장)";
+            ImportExport.importImages(this, store, uris, title,
+                    (d, n) -> {
+                        if (msg != null) msg.setText("이미지를 가져오는 중… " + d + " / " + n);
+                    },
+                    new ImportExport.Done<NotebookMeta>() {
+                        @Override
+                        public void ok(NotebookMeta m) {
+                            pd.dismiss();
+                            if (!category.startsWith("__")) {
+                                m.category = category;
+                                save(m);
+                            }
+                            refresh();
+                            open(m);
+                        }
+
+                        @Override
+                        public void fail(String m) {
+                            pd.dismiss();
+                            refresh();
+                            Toast.makeText(LibraryActivity.this, "이미지 가져오기 실패: " + m, Toast.LENGTH_LONG).show();
+                        }
+                    });
+            return;
+        }
+        if (data.getData() == null) return;
         Uri uri = data.getData();
+        if (req == REQ_COVER && coverTarget != null) {
+            try {
+                ImportExport.saveCover(this, uri, store.dir(coverTarget.id));
+                coverTarget.coverImage = true;
+                save(coverTarget);
+            } catch (Exception e) {
+                Toast.makeText(this, "표지 이미지 설정 실패: " + e.getMessage(), Toast.LENGTH_LONG).show();
+            }
+            coverTarget = null;
+            return;
+        }
         if (req == REQ_PDF) {
             AlertDialog pd = progress("PDF를 가져오는 중…");
             TextView msg = pd.getWindow().getDecorView().findViewWithTag("msg");
@@ -391,6 +619,10 @@ public class LibraryActivity extends Activity {
                         @Override
                         public void ok(NotebookMeta m) {
                             pd.dismiss();
+                            if (!category.startsWith("__")) {
+                                m.category = category;
+                                save(m);
+                            }
                             refresh();
                             open(m);
                         }
@@ -430,6 +662,9 @@ public class LibraryActivity extends Activity {
         pm.getMenu().add(0, 1, 1, "이름 바꾸기");
         pm.getMenu().add(0, 2, 2, m.favorite ? "즐겨찾기 해제" : "★ 즐겨찾기");
         pm.getMenu().add(0, 3, 3, "표지 색 바꾸기");
+        pm.getMenu().add(0, 7, 3, "표지 이미지 설정");
+        if (m.coverImage) pm.getMenu().add(0, 8, 3, "표지 이미지 제거");
+        pm.getMenu().add(0, 9, 3, "분류 지정" + (m.category.isEmpty() ? "" : " (" + m.category + ")"));
         pm.getMenu().add(0, 4, 4, "복제");
         pm.getMenu().add(0, 5, 5, "백업 파일로 내보내기");
         pm.getMenu().add(0, 6, 6, "삭제");
@@ -449,6 +684,20 @@ public class LibraryActivity extends Activity {
                         save(m);
                         break;
                     case 3: pickCover(m); break;
+                    case 7: {
+                        coverTarget = m;
+                        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                        i.addCategory(Intent.CATEGORY_OPENABLE);
+                        i.setType("image/*");
+                        startActivityForResult(i, REQ_COVER);
+                        break;
+                    }
+                    case 8:
+                        new File(store.dir(m.id), "cover.jpg").delete();
+                        m.coverImage = false;
+                        save(m);
+                        break;
+                    case 9: chooseCategory(m); break;
                     case 4:
                         if (checkLimit()) {
                             store.duplicate(m);
@@ -499,7 +748,11 @@ public class LibraryActivity extends Activity {
         row.setPadding(p, p, p, p);
         android.widget.HorizontalScrollView hs = new android.widget.HorizontalScrollView(this);
         hs.addView(row);
-        AlertDialog d = new AlertDialog.Builder(this).setTitle("표지 색").setView(hs).setNegativeButton("닫기", null).create();
+        AlertDialog d = new AlertDialog.Builder(this).setTitle("표지 색").setView(hs).setNegativeButton("닫기", null)
+                .setPositiveButton("직접 색 만들기", (dd, w) -> ColorPicker.show(this, m.coverColor, false, c -> {
+                    m.coverColor = c | 0xFF000000;
+                    save(m);
+                })).create();
         for (int c : Ui.COVER_COLORS) {
             Ui.Swatch s = new Ui.Swatch(this, c);
             s.setChosen(c == m.coverColor);
@@ -676,7 +929,18 @@ public class LibraryActivity extends Activity {
                     if (th != null) thumbs.put(m.id, th);
                 }
             }
-            cover.bind(m, th);
+            Bitmap cimg = null;
+            if (m.coverImage) {
+                cimg = thumbs.get(m.id + "#cover");
+                if (cimg == null) {
+                    File cf = new File(store.dir(m.id), "cover.jpg");
+                    if (cf.exists()) {
+                        cimg = BitmapFactory.decodeFile(cf.getPath());
+                        if (cimg != null) thumbs.put(m.id + "#cover", cimg);
+                    }
+                }
+            }
+            cover.bind(m, th, cimg);
             name.setText(m.title);
             String date = new SimpleDateFormat("yyyy.MM.dd", Locale.KOREA).format(new Date(m.modified));
             sub.setText((m.infinite ? "무한 캔버스" : m.pageCount + "페이지") + " · " + date);

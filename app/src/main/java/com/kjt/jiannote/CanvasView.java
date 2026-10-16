@@ -53,6 +53,18 @@ public class CanvasView extends View {
         void onDocChanged();
 
         void onLayerLimit();
+
+        /** 꾹 눌러서 텍스트/이미지 등을 선택함 */
+        void onLongPressSelected();
+
+        /** 선택 영역 편집(이동·크기·삭제 등)이 한 번 끝남 */
+        void onSelectionEdited();
+
+        /** 스포이드로 색을 집음 */
+        void onColorPicked(int color);
+
+        /** 고정된 요소를 꾹 누름 */
+        void onLockedPressed(Element e);
     }
 
     public static final int TOOL_PEN = 0, TOOL_HIGHLIGHTER = 1, TOOL_ERASER = 2, TOOL_LASSO = 3,
@@ -92,6 +104,39 @@ public class CanvasView extends View {
     public boolean pressureEnabled = true;
     public float pressureGamma = 1.0f;
     public boolean holdToShape = true;
+    public boolean penSquare = false;
+    public boolean hlSquare = false;
+    public boolean scribbleErase = true;
+    /** 형광펜만 지우는 지우개 */
+    public boolean eraserHlOnly = false;
+    /** 사각형 올가미 */
+    public boolean lassoRect = false;
+    /** 0=전체 1=펜 2=형광펜 3=이미지 4=텍스트 */
+    public int lassoFilter = 0;
+    /** 스포이드 모드: 다음 터치 위치의 색을 집는다 */
+    public boolean eyedropper = false;
+
+    // 호버 커서
+    private float hoverX = -1, hoverY = -1;
+    // 꾹 누르기 선택
+    private final Runnable longPressRunnable = this::onLongPress;
+    private float lpSx, lpSy;
+    private int firstPointerId;
+    // 도형 보정 후 계속 누른 채 편집
+    private StrokeElem snapBase;
+    private float snapAx, snapAy, snapPx, snapPy;
+    private int snapType = -1;
+    // 스크롤용 페이지 캐시
+    private final java.util.LinkedHashMap<Page, Bitmap> pageCache = new java.util.LinkedHashMap<Page, Bitmap>(8, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(java.util.Map.Entry<Page, Bitmap> e) {
+            if (size() > 6) {
+                e.getValue().recycle();
+                return true;
+            }
+            return false;
+        }
+    };
 
     // ---- 변환
     private float scale = 1f, tx = 0f, ty = 0f;
@@ -235,7 +280,7 @@ public class CanvasView extends View {
 
     public void setPaperColor(int c) {
         paperColor = c;
-        invalidateScene();
+        invalidateContent();
     }
 
     /** 페이지 배치 다시 계산 */
@@ -309,8 +354,19 @@ public class CanvasView extends View {
     }
 
     public void invalidateScene() {
+        for (Bitmap b : pageCache.values()) b.recycle();
+        pageCache.clear();
         sceneDirty = true;
         invalidate();
+    }
+
+    public void invalidateContent() {
+        invalidateScene();
+    }
+
+    private void dropPageCache(Page p) {
+        Bitmap b = pageCache.remove(p);
+        if (b != null) b.recycle();
     }
 
     public void fitPage() {
@@ -565,6 +621,34 @@ public class CanvasView extends View {
         selBounds = null;
         if (listener != null) listener.onSelectionChanged(false);
         changed();
+        if (listener != null) listener.onSelectionEdited();
+    }
+
+    /** 선택 항목 고정 */
+    public void lockSelection() {
+        if (selection.isEmpty()) return;
+        for (Element e : selection) e.locked = true;
+        selection.clear();
+        excluded.clear();
+        selBounds = null;
+        if (listener != null) listener.onSelectionChanged(false);
+        changed();
+        if (listener != null) listener.onSelectionEdited();
+    }
+
+    public void unlock(Element e) {
+        e.locked = false;
+        changed();
+    }
+
+    public int unlockAllOnPage() {
+        int c = 0;
+        for (Layer l : page().layers) for (Element e : l.elems) if (e.locked) {
+            e.locked = false;
+            c++;
+        }
+        if (c > 0) changed();
+        return c;
     }
 
     public void duplicateSelection() {
@@ -577,6 +661,7 @@ public class CanvasView extends View {
         pushElems(l, before);
         changed();
         select(copies);
+        if (listener != null) listener.onSelectionEdited();
     }
 
     public void recolorSelection(int color) {
@@ -600,6 +685,7 @@ public class CanvasView extends View {
         activeLayer = target;
         changed();
         select(moved);
+        if (listener != null) listener.onSelectionEdited();
     }
 
     private interface ElemFn {
@@ -619,6 +705,7 @@ public class CanvasView extends View {
         pushElems(l, before);
         changed();
         select(newSel);
+        if (listener != null) listener.onSelectionEdited();
     }
 
     // ================= 좌표 (현재 페이지 기준) =================
@@ -689,7 +776,46 @@ public class CanvasView extends View {
     @Override
     protected void onDraw(Canvas canvas) {
         if (doc == null || scene == null) return;
-        if (sceneDirty && (!gestureActive || (!pinching && lastRenderMs < 28))) renderScene();
+        boolean moving = gestureActive || !scroller.isFinished();
+        if (moving && !isInfinite() && sceneDirty && (pinching || lastRenderMs > 12)) {
+            drawFromPageCache(canvas);
+        } else {
+            if (sceneDirty) renderScene();
+            drawScene(canvas);
+        }
+        drawOverlays(canvas);
+    }
+
+    /** 각 페이지를 낮은 해상도로 캐시해 두었다가 스크롤·확대 중에는 그대로 늘려 그린다 */
+    private void drawFromPageCache(Canvas canvas) {
+        canvas.drawRect(0, 0, getWidth(), getHeight(), deskPaint);
+        float gTop = -ty / scale, gBot = (getHeight() - ty) / scale;
+        float sh = 3 * density;
+        for (int i = 0; i < doc.pages.size(); i++) {
+            Page p = doc.pages.get(i);
+            float top = pageTop[i], left = pageLeft[i];
+            if (top > gBot || top + p.h < gTop) continue;
+            Bitmap b = pageCache.get(p);
+            if (b == null || b.isRecycled()) {
+                float cs = Math.min(1.6f, 1500f / Math.max(1f, p.w));
+                try {
+                    b = Bitmap.createBitmap(Math.max(1, Math.round(p.w * cs)), Math.max(1, Math.round(p.h * cs)), Bitmap.Config.RGB_565);
+                } catch (OutOfMemoryError oom) {
+                    invalidateContent();
+                    return;
+                }
+                Canvas c = new Canvas(b);
+                c.scale(cs, cs);
+                Renderer.drawPage(c, p, paperColor, rc, new RectF(0, 0, p.w, p.h), cs, null);
+                pageCache.put(p, b);
+            }
+            float sl = tx + left * scale, st = ty + top * scale;
+            canvas.drawRect(sl + sh, st + sh, sl + p.w * scale + sh, st + p.h * scale + sh, shadowPaint);
+            canvas.drawBitmap(b, null, new RectF(sl, st, sl + p.w * scale, st + p.h * scale), bitmapPaint);
+        }
+    }
+
+    private void drawScene(Canvas canvas) {
         boolean same = sceneScale == scale && sceneTx == tx && sceneTy == ty;
         if (same) {
             canvas.drawBitmap(scene, 0, 0, null);
@@ -700,7 +826,9 @@ public class CanvasView extends View {
             tmpMatrix.postTranslate(tx - k * sceneTx, ty - k * sceneTy);
             canvas.drawBitmap(scene, tmpMatrix, bitmapPaint);
         }
+    }
 
+    private void drawOverlays(Canvas canvas) {
         canvas.save();
         canvas.translate(tx, ty);
         canvas.scale(scale, scale);
@@ -714,7 +842,11 @@ public class CanvasView extends View {
         }
         canvas.restore();
 
-        if (inputKind == IN_LASSO && !lassoPts.isEmpty()) {
+        if (inputKind == IN_LASSO && !lassoPts.isEmpty() && lassoRect) {
+            float[] a = lassoPts.get(0), b = lassoPts.get(lassoPts.size() - 1);
+            canvas.drawRect(Math.min(sxOf(a[0]), sxOf(b[0])), Math.min(syOf(a[1]), syOf(b[1])),
+                    Math.max(sxOf(a[0]), sxOf(b[0])), Math.max(syOf(a[1]), syOf(b[1])), lassoPaint);
+        } else if (inputKind == IN_LASSO && !lassoPts.isEmpty()) {
             lassoPath.reset();
             for (int i = 0; i < lassoPts.size(); i++) {
                 float[] q = lassoPts.get(i);
@@ -731,6 +863,13 @@ public class CanvasView extends View {
         }
         if ((tool == TOOL_ERASER || inputKind == IN_ERASE) && eraserSx >= 0) {
             canvas.drawCircle(eraserSx, eraserSy, eraserSize / 2f, cursorPaint);
+        } else if (hoverX >= 0 && inputKind == IN_NONE && (tool == TOOL_PEN || tool == TOOL_HIGHLIGHTER || tool == TOOL_SHAPE)) {
+            // 펜을 화면 가까이 댔을 때 굵기만큼 원 표시
+            float w = tool == TOOL_HIGHLIGHTER ? hlWidth : penWidth;
+            float r = Math.max(2 * density, w * scale / 2f);
+            cursorPaint.setColor(tool == TOOL_HIGHLIGHTER ? (hlColor & 0x00FFFFFF) | 0xCC000000 : 0xAA555555);
+            canvas.drawCircle(hoverX, hoverY, r, cursorPaint);
+            cursorPaint.setColor(0xAA555555);
         }
     }
 
@@ -755,6 +894,7 @@ public class CanvasView extends View {
             sceneDirty = true;
             updatePageFromViewport();
             postInvalidateOnAnimation();
+            if (scroller.isFinished()) postInvalidate();
         }
     }
 
@@ -765,6 +905,13 @@ public class CanvasView extends View {
         int tt = e.getToolType(0);
         if (tt == MotionEvent.TOOL_TYPE_STYLUS || tt == MotionEvent.TOOL_TYPE_ERASER) {
             lastHoverTime = SystemClock.uptimeMillis();
+            if (e.getActionMasked() == MotionEvent.ACTION_HOVER_EXIT) {
+                hoverX = hoverY = -1;
+            } else {
+                hoverX = e.getX();
+                hoverY = e.getY();
+            }
+            invalidate();
             if (tool == TOOL_ERASER) {
                 if (e.getActionMasked() == MotionEvent.ACTION_HOVER_EXIT) {
                     eraserSx = -1;
@@ -804,9 +951,17 @@ public class CanvasView extends View {
                 downSy = e.getY();
                 downTime = e.getEventTime();
                 movedFar = false;
+                hoverX = -1;
+                firstPointerId = e.getPointerId(0);
+                if (eyedropper) {
+                    pickColor(e.getX(), e.getY());
+                    mode = M_IGNORE;
+                    break;
+                }
                 if (tool == TOOL_HAND) {
                     mode = M_GESTURE;
                     startGesture(e, -1);
+                    scheduleLongPress(e.getX(), e.getY());
                 } else if (stylus || fingerDraw) {
                     mode = M_DRAW;
                     drawPointerId = e.getPointerId(0);
@@ -820,10 +975,12 @@ public class CanvasView extends View {
                 } else {
                     mode = M_GESTURE;
                     startGesture(e, -1);
+                    scheduleLongPress(e.getX(), e.getY());
                 }
                 break;
             }
             case MotionEvent.ACTION_POINTER_DOWN: {
+                handler.removeCallbacks(longPressRunnable);
                 int ai = e.getActionIndex();
                 if (isStylus(e, ai) && mode != M_DRAW && tool != TOOL_HAND) {
                     if (gestureActive) endGesture(false);
@@ -855,6 +1012,7 @@ public class CanvasView extends View {
                     if (idx >= 0) moveInput(e, idx);
                 } else if (mode == M_GESTURE) {
                     moveGesture(e);
+                    if (movedFar) handler.removeCallbacks(longPressRunnable);
                 }
                 break;
             }
@@ -871,6 +1029,7 @@ public class CanvasView extends View {
                 break;
             }
             case MotionEvent.ACTION_UP: {
+                handler.removeCallbacks(longPressRunnable);
                 if (mode == M_DRAW) {
                     int idx = e.findPointerIndex(drawPointerId);
                     endInput(e, Math.max(idx, 0));
@@ -883,6 +1042,7 @@ public class CanvasView extends View {
                 break;
             }
             case MotionEvent.ACTION_CANCEL: {
+                handler.removeCallbacks(longPressRunnable);
                 cancelInput();
                 if (gestureActive) endGesture(false);
                 mode = M_NONE;
@@ -910,10 +1070,19 @@ public class CanvasView extends View {
         float p = (stylus && pressureEnabled) ? pressure : 0.55f;
         p = Math.max(0.02f, Math.min(1f, p));
         float f = (float) Math.pow(p, pressureGamma);
-        switch (penType) {
-            case StrokeElem.FOUNTAIN: return penWidth * (0.15f + 1.35f * f);
-            case StrokeElem.BRUSH: return penWidth * (0.05f + 2.4f * f);
-            default: return penWidth * (0.55f + 0.7f * f);
+        return penWidthFor(penType, penWidth, f);
+    }
+
+    /** 펜 종류별 필압 → 굵기 (f = 0~1) */
+    public static float penWidthFor(int type, float base, float f) {
+        switch (type) {
+            case StrokeElem.FOUNTAIN: return base * (0.15f + 1.35f * f);
+            case StrokeElem.BRUSH: return base * (0.05f + 2.4f * f);
+            case StrokeElem.PENCIL: return base * (0.45f + 0.6f * f);
+            case StrokeElem.MARKER: return base * 1.4f;
+            case StrokeElem.AIRBRUSH: return base * (0.8f + 1.2f * f);
+            case StrokeElem.WATERCOLOR: return base * (0.2f + 2.0f * f);
+            default: return base * (0.55f + 0.7f * f);
         }
     }
 
@@ -934,8 +1103,10 @@ public class CanvasView extends View {
             case TOOL_PEN: {
                 inputKind = IN_STROKE;
                 snapped = false;
-                current = new StrokeElem(penType, penColor);
+                current = new StrokeElem(penType, penColor, penSquare);
                 lastWidth = widthFor(e.getPressure(idx), drawIsStylus);
+                snapType = -1;
+                scheduleLongPress(sx, sy);
                 current.add(x, y, lastWidth);
                 holdAnchorX = sx;
                 holdAnchorY = sy;
@@ -945,8 +1116,10 @@ public class CanvasView extends View {
             case TOOL_HIGHLIGHTER: {
                 inputKind = IN_STROKE;
                 snapped = false;
-                current = new StrokeElem(StrokeElem.HIGHLIGHTER, hlColor);
+                current = new StrokeElem(StrokeElem.HIGHLIGHTER, hlColor, hlSquare);
                 current.add(x, y, hlWidth);
+                snapType = -1;
+                scheduleLongPress(sx, sy);
                 holdAnchorX = sx;
                 holdAnchorY = sy;
                 scheduleHold();
@@ -994,6 +1167,7 @@ public class CanvasView extends View {
             }
             case TOOL_TEXT: {
                 inputKind = IN_TAP;
+                scheduleLongPress(sx, sy);
                 break;
             }
             default:
@@ -1007,6 +1181,11 @@ public class CanvasView extends View {
         if (Math.hypot(sx - downSx, sy - downSy) > 12 * density) movedFar = true;
         switch (inputKind) {
             case IN_STROKE: {
+                if (Math.hypot(sx - lpSx, sy - lpSy) > 10 * density) handler.removeCallbacks(longPressRunnable);
+                if (snapped && current != null && snapBase != null) {
+                    editSnapped(wx(sx), wy(sy));
+                    return;
+                }
                 if (snapped || current == null) return;
                 int hs = e.getHistorySize();
                 for (int h = 0; h < hs; h++) {
@@ -1035,6 +1214,10 @@ public class CanvasView extends View {
                 invalidate();
                 break;
             }
+            case IN_TAP: {
+                if (Math.hypot(sx - lpSx, sy - lpSy) > 10 * density) handler.removeCallbacks(longPressRunnable);
+                break;
+            }
             case IN_MOVE: {
                 previewDx = wx(sx) - dragStartX;
                 previewDy = wy(sy) - dragStartY;
@@ -1055,7 +1238,8 @@ public class CanvasView extends View {
                 break;
             }
             case IN_SHAPE: {
-                current = ShapeRecognizer.build(shapeType, shapeX0, shapeY0, wx(sx), wy(sy), penColor, penWidth);
+                current = ShapeRecognizer.build(shapeType, shapeX0, shapeY0, wx(sx), wy(sy),
+                        new StrokeElem(penType, penColor, penSquare), penWidth);
                 invalidate();
                 break;
             }
@@ -1077,14 +1261,25 @@ public class CanvasView extends View {
             lastWidth = w;
         }
         current.add(wx(sx), wy(sy), w);
+        if (current.square) current.invalidatePath();
     }
 
     private void endInput(MotionEvent e, int idx) {
         handler.removeCallbacks(holdRunnable);
         switch (inputKind) {
             case IN_STROKE: {
-                if (current != null && current.n > 0) commitElement(current);
+                handler.removeCallbacks(longPressRunnable);
+                if (current != null && current.n > 0) {
+                    if (!snapped && scribbleErase && current.pen != StrokeElem.HIGHLIGHTER && scribbleErase(current)) {
+                        current = null;
+                        snapBase = null;
+                        break;
+                    }
+                    Element done = snapped ? current : current.smoothResampled(Math.max(1.5f, 3f / scale));
+                    commitElement(done);
+                }
                 current = null;
+                snapBase = null;
                 break;
             }
             case IN_ERASE: {
@@ -1105,7 +1300,7 @@ public class CanvasView extends View {
                     final float dx = previewDx, dy = previewDy, s = previewScale;
                     final float px = selBounds.left, py = selBounds.top;
                     selPreview = null;
-                    replaceSelection(el -> el.transformed(dx, dy, s, px, py));
+                    replaceSelection(el -> el.transformedKeepWidth(dx, dy, s, px, py));
                 }
                 selPreview = null;
                 previewDx = previewDy = 0;
@@ -1121,6 +1316,7 @@ public class CanvasView extends View {
                 break;
             }
             case IN_TAP: {
+                handler.removeCallbacks(longPressRunnable);
                 if (!movedFar) textTap(wx(e.getX(idx)), wy(e.getY(idx)));
                 break;
             }
@@ -1133,6 +1329,8 @@ public class CanvasView extends View {
 
     private void cancelInput() {
         handler.removeCallbacks(holdRunnable);
+        handler.removeCallbacks(longPressRunnable);
+        snapBase = null;
         if (inputKind == IN_ERASE && eraseChanged && eraseBefore != null) {
             activeLayer().elems = eraseBefore;
             invalidateScene();
@@ -1179,18 +1377,172 @@ public class CanvasView extends View {
 
     private void onHold() {
         if (inputKind != IN_STROKE || current == null || snapped) return;
+        float penX = current.lastX(), penY = current.lastY();
+        float firstX = current.pts[0], firstY = current.pts[1];
         StrokeElem shape = ShapeRecognizer.recognize(current);
+        int type = shape != null ? ShapeRecognizer.lastType : -1;
+        if (shape == null && current.n >= 8 && current.length() * scale > 60 * density) {
+            shape = current.smoothedCurve(); // 곡선 보정
+            type = -1;
+        }
         if (shape != null) {
-            if (current.pen == StrokeElem.HIGHLIGHTER) {
-                StrokeElem h = new StrokeElem(StrokeElem.HIGHLIGHTER, current.color);
-                for (int i = 0; i < shape.n; i++) h.add(shape.pts[3 * i], shape.pts[3 * i + 1], hlWidth);
-                shape = h;
+            // 계속 누른 채 움직이면 크기·길이·방향을 바꿀 수 있도록 기준 저장
+            snapBase = shape;
+            snapType = type;
+            snapPx = penX;
+            snapPy = penY;
+            if (type == ShapeRecognizer.LINE || type == -1) {
+                snapAx = firstX;
+                snapAy = firstY;
+            } else {
+                RectF b = shape.bounds();
+                snapAx = Math.abs(penX - b.left) > Math.abs(penX - b.right) ? b.left : b.right;
+                snapAy = Math.abs(penY - b.top) > Math.abs(penY - b.bottom) ? b.top : b.bottom;
             }
             current = shape;
             snapped = true;
             performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
             invalidate();
         }
+    }
+
+    /** 보정된 도형을 펜 위치에 맞춰 늘이기 / 돌리기 */
+    private void editSnapped(float x, float y) {
+        if (snapType == ShapeRecognizer.LINE || snapType == ShapeRecognizer.ARROW || snapType == -1) {
+            // 기준점(시작점) 기준으로 회전 + 길이 조절
+            double a0 = Math.atan2(snapPy - snapAy, snapPx - snapAx), a1 = Math.atan2(y - snapAy, x - snapAx);
+            float d0 = (float) Math.hypot(snapPx - snapAx, snapPy - snapAy), d1 = (float) Math.hypot(x - snapAx, y - snapAy);
+            if (d0 < 1) return;
+            float k = d1 / d0;
+            double rot = a1 - a0;
+            float cos = (float) Math.cos(rot), sin = (float) Math.sin(rot);
+            StrokeElem out = snapBase.blank();
+            for (int i = 0; i < snapBase.n; i++) {
+                float px = snapBase.pts[3 * i] - snapAx, py = snapBase.pts[3 * i + 1] - snapAy;
+                out.add(snapAx + (px * cos - py * sin) * k, snapAy + (px * sin + py * cos) * k, snapBase.pts[3 * i + 2]);
+            }
+            current = out;
+        } else {
+            float dx0 = snapPx - snapAx, dy0 = snapPy - snapAy;
+            float sx = Math.abs(dx0) < 2 ? 1 : (x - snapAx) / dx0;
+            float sy = Math.abs(dy0) < 2 ? 1 : (y - snapAy) / dy0;
+            current = snapBase.stretched(snapAx, snapAy, sx, sy);
+        }
+        invalidate();
+    }
+
+    // ---------- 꾹 누르기 선택 ----------
+
+    private void scheduleLongPress(float sx, float sy) {
+        lpSx = sx;
+        lpSy = sy;
+        handler.removeCallbacks(longPressRunnable);
+        handler.postDelayed(longPressRunnable, 500);
+    }
+
+    /** 텍스트·이미지 (그리고 고정된 요소) 위를 꾹 누르면 선택 */
+    private void onLongPress() {
+        if (doc == null || movedFar) return;
+        if (inputKind == IN_STROKE && current != null && current.length() * scale > 12 * density) return;
+        switchToPageAt(lpSx, lpSy);
+        float x = wx(lpSx), y = wy(lpSy);
+        Page p = page();
+        for (int li = p.layers.size() - 1; li >= 0; li--) {
+            Layer l = p.layers.get(li);
+            if (!l.visible) continue;
+            for (int i = l.elems.size() - 1; i >= 0; i--) {
+                Element e = l.elems.get(i);
+                boolean target = e instanceof TextElem || e instanceof ImageElem || e.locked;
+                if (!target || !e.hit(x, y, 6 / scale)) continue;
+                handler.removeCallbacks(holdRunnable);
+                current = null;
+                snapBase = null;
+                performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
+                if (e.locked) {
+                    inputKind = IN_NONE;
+                    mode = M_IGNORE;
+                    if (listener != null) listener.onLockedPressed(e);
+                    invalidate();
+                    return;
+                }
+                activeLayer = li;
+                select(java.util.Collections.singletonList(e));
+                if (listener != null) listener.onLongPressSelected();
+                // 손을 떼지 않고 바로 끌어서 옮길 수 있게
+                inputKind = IN_MOVE;
+                dragStartX = x;
+                dragStartY = y;
+                if (mode == M_GESTURE) {
+                    gestureActive = false;
+                    pinching = false;
+                    mode = M_DRAW;
+                    drawPointerId = firstPointerId;
+                    drawIsStylus = false;
+                }
+                invalidate();
+                return;
+            }
+        }
+    }
+
+    // ---------- 낙서해서 지우기 ----------
+
+    /** 지그재그로 마구 그은 획이면 그 아래 획들을 지우고 true */
+    private boolean scribbleErase(StrokeElem s) {
+        if (s.n < 12) return false;
+        RectF b = s.bounds();
+        float diag = (float) Math.hypot(b.width(), b.height());
+        if (diag * scale < 20 * density) return false;
+        float len = s.length();
+        if (len < diag * 3.2f) return false;
+        // 진행 방향이 크게 꺾이는(되돌아가는) 횟수
+        int reversals = 0;
+        float pdx = 0, pdy = 0;
+        int step = Math.max(1, s.n / 60);
+        for (int i = step; i < s.n; i += step) {
+            float dx = s.pts[3 * i] - s.pts[3 * (i - step)], dy = s.pts[3 * i + 1] - s.pts[3 * (i - step) + 1];
+            if (Math.hypot(dx, dy) < 1.5f) continue;
+            if (pdx * dx + pdy * dy < -0.3f * Math.hypot(pdx, pdy) * Math.hypot(dx, dy)) reversals++;
+            pdx = dx;
+            pdy = dy;
+        }
+        if (reversals < 5) return false;
+        Layer l = activeLayer();
+        ArrayList<Element> keep = new ArrayList<>();
+        int removed = 0;
+        for (Element e : l.elems) {
+            boolean kill = false;
+            if (!e.locked && e instanceof StrokeElem && RectF.intersects(b, e.bounds())) {
+                StrokeElem t = (StrokeElem) e;
+                int hit = 0, tot = 0;
+                int st = Math.max(1, t.n / 30);
+                for (int i = 0; i < t.n; i += st) {
+                    tot++;
+                    if (s.hit(t.pts[3 * i], t.pts[3 * i + 1], s.avgWidth() * 1.5f + 2)) hit++;
+                }
+                kill = tot > 0 && hit >= Math.max(1, tot * 0.35f);
+            }
+            if (kill) removed++;
+            else keep.add(e);
+        }
+        if (removed == 0) return false;
+        ArrayList<Element> before = new ArrayList<>(l.elems);
+        l.elems = keep;
+        pushElems(l, before);
+        changed();
+        return true;
+    }
+
+    // ---------- 스포이드 ----------
+
+    private void pickColor(float sx, float sy) {
+        eyedropper = false;
+        if (scene == null) return;
+        if (sceneDirty) renderScene();
+        int x = Math.max(0, Math.min(scene.getWidth() - 1, Math.round(sx)));
+        int y = Math.max(0, Math.min(scene.getHeight() - 1, Math.round(sy)));
+        int c = scene.getPixel(x, y) | 0xFF000000;
+        if (listener != null) listener.onColorPicked(c);
     }
 
     // ---------- 지우개 ----------
@@ -1215,7 +1567,9 @@ public class CanvasView extends View {
             Element e = l.elems.get(i);
             boolean hit;
             ArrayList<StrokeElem> pieces = null;
-            if (e instanceof StrokeElem) {
+            if (e.locked || (eraserHlOnly && !(e instanceof StrokeElem && ((StrokeElem) e).isHighlighter()))) {
+                hit = false;
+            } else if (e instanceof StrokeElem) {
                 if (eraserPartial) {
                     pieces = ((StrokeElem) e).eraseSplit(x, y, r);
                     hit = pieces != null;
@@ -1239,21 +1593,45 @@ public class CanvasView extends View {
             l.elems = out;
             eraseChanged = true;
             sceneDirty = true;
+            dropPageCache(page());
         }
     }
 
     // ---------- 올가미 ----------
 
+    private boolean passFilter(Element e) {
+        if (e.locked) return false;
+        switch (lassoFilter) {
+            case 1: return e instanceof StrokeElem && !((StrokeElem) e).isHighlighter();
+            case 2: return e instanceof StrokeElem && ((StrokeElem) e).isHighlighter();
+            case 3: return e instanceof ImageElem;
+            case 4: return e instanceof TextElem;
+            default: return true;
+        }
+    }
+
     private void finishLasso() {
-        if (lassoPts.size() < 3) return;
-        int m = lassoPts.size();
-        float[] xs = new float[m], ys = new float[m];
-        for (int i = 0; i < m; i++) {
-            xs[i] = lassoPts.get(i)[0];
-            ys[i] = lassoPts.get(i)[1];
+        float[] xs, ys;
+        if (lassoRect) {
+            if (lassoPts.size() < 2) return;
+            float[] a = lassoPts.get(0), b = lassoPts.get(lassoPts.size() - 1);
+            float l = Math.min(a[0], b[0]), r = Math.max(a[0], b[0]), t = Math.min(a[1], b[1]), bt = Math.max(a[1], b[1]);
+            if ((r - l) * scale < 8 || (bt - t) * scale < 8) return;
+            xs = new float[]{l, r, r, l};
+            ys = new float[]{t, t, bt, bt};
+        } else {
+            if (lassoPts.size() < 3) return;
+            int m = lassoPts.size();
+            xs = new float[m];
+            ys = new float[m];
+            for (int i = 0; i < m; i++) {
+                xs[i] = lassoPts.get(i)[0];
+                ys[i] = lassoPts.get(i)[1];
+            }
         }
         ArrayList<Element> sel = new ArrayList<>();
         for (Element e : activeLayer().elems) {
+            if (!passFilter(e)) continue;
             if (e instanceof StrokeElem) {
                 StrokeElem s = (StrokeElem) e;
                 int inside = 0;
@@ -1279,7 +1657,7 @@ public class CanvasView extends View {
     private void buildPreview() {
         ArrayList<Element> list = new ArrayList<>();
         float px = selBounds.left, py = selBounds.top;
-        for (Element e : selection) list.add(e.transformed(previewDx, previewDy, previewScale, px, py));
+        for (Element e : selection) list.add(e.transformedKeepWidth(previewDx, previewDy, previewScale, px, py));
         selPreview = list;
     }
 
@@ -1290,7 +1668,7 @@ public class CanvasView extends View {
         Layer l = activeLayer();
         for (int i = l.elems.size() - 1; i >= 0; i--) {
             Element e = l.elems.get(i);
-            if (e instanceof TextElem && e.hit(x, y, 4)) {
+            if (e instanceof TextElem && !e.locked && e.hit(x, y, 4)) {
                 hitText = (TextElem) e;
                 break;
             }

@@ -13,7 +13,7 @@ import java.util.ArrayList;
 /** 노트북 하나의 전체 내용 (페이지 → 레이어 → 요소). 바이너리로 저장. */
 public class Document {
     private static final int MAGIC = 0x494E4B53; // INKS
-    private static final int VERSION = 3;
+    private static final int VERSION = 4;
 
     public ArrayList<Page> pages = new ArrayList<>();
 
@@ -35,7 +35,10 @@ public class Document {
                     o.writeBoolean(l.visible);
                     o.writeInt(l.alpha);
                     o.writeInt(l.elems.size());
-                    for (Element e : l.elems) e.write(o);
+                    for (Element e : l.elems) {
+                        o.writeByte(e.locked ? 1 : 0);
+                        e.write(o);
+                    }
                 }
             }
         }
@@ -68,6 +71,7 @@ public class Document {
                     l.alpha = in.readInt();
                     int ec = in.readInt();
                     for (int k = 0; k < ec; k++) {
+                        boolean locked = ver >= 4 && (in.readByte() & 1) != 0;
                         byte t = in.readByte();
                         switch (t) {
                             case Element.T_STROKE: l.elems.add(StrokeElem.read(in)); break;
@@ -76,6 +80,7 @@ public class Document {
                             case Element.T_IMAGE: l.elems.add(ImageElem.read(in)); break;
                             default: throw new IOException("unknown element " + t);
                         }
+                        l.elems.get(l.elems.size() - 1).locked = locked;
                     }
                     p.layers.add(l);
                 }

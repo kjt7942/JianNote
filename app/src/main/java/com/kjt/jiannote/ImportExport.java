@@ -121,6 +121,116 @@ public class ImportExport {
         });
     }
 
+    // ================= 이미지 → 페이지 =================
+
+    /** 이미지 파일 하나를 배경으로 하는 새 페이지 (images 폴더에 저장) */
+    public static Page imageToPage(android.content.Context c, Uri uri, File imgDir) throws IOException {
+        android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
+        o.inJustDecodeBounds = true;
+        try (InputStream in = c.getContentResolver().openInputStream(uri)) {
+            android.graphics.BitmapFactory.decodeStream(in, null, o);
+        }
+        if (o.outWidth <= 0) throw new IOException("이미지를 읽을 수 없습니다");
+        int sample = 1;
+        while (Math.max(o.outWidth, o.outHeight) / sample > 3000) sample *= 2;
+        android.graphics.BitmapFactory.Options o2 = new android.graphics.BitmapFactory.Options();
+        o2.inSampleSize = sample;
+        Bitmap bm;
+        try (InputStream in = c.getContentResolver().openInputStream(uri)) {
+            bm = android.graphics.BitmapFactory.decodeStream(in, null, o2);
+        }
+        if (bm == null) throw new IOException("이미지를 읽을 수 없습니다");
+        bm = rotateByExif(c, uri, bm);
+        String name = "pg_" + UUID.randomUUID().toString().substring(0, 10) + ".jpg";
+        Bitmap flat = Bitmap.createBitmap(bm.getWidth(), bm.getHeight(), Bitmap.Config.ARGB_8888);
+        flat.eraseColor(Color.WHITE);
+        new android.graphics.Canvas(flat).drawBitmap(bm, 0, 0, null);
+        try (OutputStream os = new FileOutputStream(new File(imgDir, name))) {
+            flat.compress(Bitmap.CompressFormat.JPEG, 92, os);
+        }
+        float w = bm.getWidth() >= bm.getHeight() ? 1754 : 1240;
+        float h = w * bm.getHeight() / Math.max(1f, bm.getWidth());
+        bm.recycle();
+        flat.recycle();
+        Page p = Page.create(w, h, Paper.BLANK);
+        p.bgImage = name;
+        return p;
+    }
+
+    private static Bitmap rotateByExif(android.content.Context c, Uri uri, Bitmap bm) {
+        try (InputStream in = c.getContentResolver().openInputStream(uri)) {
+            android.media.ExifInterface ex = new android.media.ExifInterface(in);
+            int or = ex.getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION, 1);
+            int deg = or == 6 ? 90 : or == 3 ? 180 : or == 8 ? 270 : 0;
+            if (deg == 0) return bm;
+            android.graphics.Matrix m = new android.graphics.Matrix();
+            m.postRotate(deg);
+            Bitmap r = Bitmap.createBitmap(bm, 0, 0, bm.getWidth(), bm.getHeight(), m, true);
+            if (r != bm) bm.recycle();
+            return r;
+        } catch (Exception e) {
+            return bm;
+        }
+    }
+
+    /** 이미지 여러 장을 페이지로 하는 새 노트 */
+    public static void importImages(Activity a, Store store, List<Uri> uris, String title, Progress progress, Done<NotebookMeta> done) {
+        run(() -> {
+            NotebookMeta meta = null;
+            try {
+                NotebookMeta m = new NotebookMeta();
+                m.title = title;
+                m.coverColor = Ui.COVER_COLORS[(int) (Math.random() * Ui.COVER_COLORS.length)];
+                m.paperColor = 0xFFFFFFFF;
+                m.template = Paper.BLANK;
+                meta = store.create(m);
+                RenderContext rc = new RenderContext(store.dir(meta.id));
+                Document doc = new Document();
+                for (int i = 0; i < uris.size(); i++) {
+                    doc.pages.add(imageToPage(a, uris.get(i), rc.imagesDir()));
+                    final int d = i + 1;
+                    MAIN.post(() -> progress.on(d, uris.size()));
+                }
+                store.saveDoc(meta.id, doc);
+                meta.pageCount = doc.pages.size();
+                meta.landscape = doc.pages.get(0).w > doc.pages.get(0).h;
+                store.saveMeta(meta);
+                Bitmap th = Renderer.thumbnail(doc.pages.get(0), meta.paperColor, rc, 360, 500);
+                store.saveThumb(meta.id, th);
+                final NotebookMeta result = meta;
+                MAIN.post(() -> done.ok(result));
+            } catch (Throwable e) {
+                if (meta != null) store.delete(meta.id);
+                final String msg = e instanceof OutOfMemoryError ? "메모리가 부족합니다" : String.valueOf(e.getMessage());
+                MAIN.post(() -> done.fail(msg));
+            }
+        });
+    }
+
+    /** 표지 이미지 저장 (cover.jpg, 긴 변 900px) */
+    public static void saveCover(android.content.Context c, Uri uri, File dir) throws IOException {
+        android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
+        o.inJustDecodeBounds = true;
+        try (InputStream in = c.getContentResolver().openInputStream(uri)) {
+            android.graphics.BitmapFactory.decodeStream(in, null, o);
+        }
+        int sample = 1;
+        while (Math.max(o.outWidth, o.outHeight) / sample > 1800) sample *= 2;
+        android.graphics.BitmapFactory.Options o2 = new android.graphics.BitmapFactory.Options();
+        o2.inSampleSize = sample;
+        Bitmap bm;
+        try (InputStream in = c.getContentResolver().openInputStream(uri)) {
+            bm = android.graphics.BitmapFactory.decodeStream(in, null, o2);
+        }
+        if (bm == null) throw new IOException("이미지를 읽을 수 없습니다");
+        bm = rotateByExif(c, uri, bm);
+        float k = Math.min(1f, 900f / Math.max(bm.getWidth(), bm.getHeight()));
+        Bitmap sc = Bitmap.createScaledBitmap(bm, Math.max(1, Math.round(bm.getWidth() * k)), Math.max(1, Math.round(bm.getHeight() * k)), true);
+        try (OutputStream os = new FileOutputStream(new File(dir, "cover.jpg"))) {
+            sc.compress(Bitmap.CompressFormat.JPEG, 90, os);
+        }
+    }
+
     // ================= 백업 내보내기 =================
 
     /** 노트(들)를 하나의 .jnote 파일로 다운로드 폴더에 저장 */
