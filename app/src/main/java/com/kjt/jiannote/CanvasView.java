@@ -21,6 +21,8 @@ import com.kjt.jiannote.model.Document;
 import com.kjt.jiannote.model.Element;
 import com.kjt.jiannote.model.ImageElem;
 import com.kjt.jiannote.model.Layer;
+import com.kjt.jiannote.model.MemoElem;
+import com.kjt.jiannote.model.TapeElem;
 import com.kjt.jiannote.model.Page;
 import com.kjt.jiannote.model.StrokeElem;
 import com.kjt.jiannote.model.TextElem;
@@ -68,11 +70,11 @@ public class CanvasView extends View {
     }
 
     public static final int TOOL_PEN = 0, TOOL_HIGHLIGHTER = 1, TOOL_ERASER = 2, TOOL_LASSO = 3,
-            TOOL_SHAPE = 4, TOOL_TEXT = 5, TOOL_HAND = 6;
+            TOOL_SHAPE = 4, TOOL_TEXT = 5, TOOL_HAND = 6, TOOL_TAPE = 7, TOOL_MEMO = 8;
 
     private static final int M_NONE = 0, M_DRAW = 1, M_GESTURE = 2, M_IGNORE = 3, M_PALM = 4;
     private static final int IN_NONE = 0, IN_STROKE = 1, IN_ERASE = 2, IN_LASSO = 3, IN_MOVE = 4,
-            IN_SCALE = 5, IN_SHAPE = 6, IN_TAP = 7;
+            IN_SCALE = 5, IN_SHAPE = 6, IN_TAP = 7, IN_TAPE = 8, IN_MEMO = 9, IN_TAPE_TAP = 10;
     private static final float GAP = 48f;
 
     // ---- 문서 상태
@@ -115,6 +117,20 @@ public class CanvasView extends View {
     public int lassoFilter = 0;
     /** 스포이드 모드: 다음 터치 위치의 색을 집는다 */
     public boolean eyedropper = false;
+    // 테이프
+    public float tapeWidth = 48f;
+    public int tapeColor = 0xFFFF8A65;
+    public int tapePattern = TapeElem.STRIPE;
+    /** 켜면 테이프 위에 글씨를 쓰고, 끄면 테이프를 터치해 가리기/보이기 */
+    public boolean tapeWriteMode = false;
+    /** 테이프를 붙일 때 아래 내용과 자동으로 묶기 */
+    public boolean tapeAutoAttach = true;
+    // 메모지
+    public int memoColor = MemoElem.COLORS[0];
+    public int memoPattern = MemoElem.LINED;
+    private TapeElem tapTarget;
+    private Element previewElem;
+    private float tapeX0, tapeY0;
 
     // 호버 커서
     private float hoverX = -1, hoverY = -1;
@@ -534,7 +550,9 @@ public class CanvasView extends View {
         } else if (idx >= 0) {
             l.elems.set(idx, existing.withText(text, style));
         } else {
-            l.elems.add(new TextElem(x, y, text, style, 0));
+            TextElem t = new TextElem(x, y, text, style, 0);
+            joinContainer(t, x, y);
+            l.elems.add(t);
         }
         pushElems(l, before);
         changed();
@@ -595,6 +613,15 @@ public class CanvasView extends View {
         selection.clear();
         excluded.clear();
         selection.addAll(list);
+        // 테이프·메모지가 포함되면 함께 묶인 내용도 선택
+        java.util.HashSet<Integer> groups = new java.util.HashSet<>();
+        for (Element e : list) if (e.isContainer() && e.group != 0) groups.add(e.group);
+        if (!groups.isEmpty()) {
+            for (Element e : activeLayer().elems) {
+                if (e.group != 0 && groups.contains(e.group) && !selection.contains(e) && !e.locked) selection.add(e);
+            }
+        }
+        list = new ArrayList<>(selection);
         excluded.addAll(list);
         updateSelBounds();
         invalidateScene();
@@ -622,6 +649,171 @@ public class CanvasView extends View {
         if (listener != null) listener.onSelectionChanged(false);
         changed();
         if (listener != null) listener.onSelectionEdited();
+    }
+
+    public static int newGroup() {
+        int g;
+        do {
+            g = (int) (Math.random() * Integer.MAX_VALUE);
+        } while (g == 0);
+        return g;
+    }
+
+    /** (x,y) 아래의 메모지 (또는 쓰기 모드일 때 테이프) — 위에 쓴 것을 묶기 위해 */
+    private Element containerAt(float x, float y) {
+        Layer l = activeLayer();
+        for (int i = l.elems.size() - 1; i >= 0; i--) {
+            Element e = l.elems.get(i);
+            if (e instanceof MemoElem && ((MemoElem) e).contains(x, y)) return e;
+            if (tapeWriteMode && e instanceof TapeElem && e.hit(x, y, 0)) return e;
+        }
+        return null;
+    }
+
+    private void joinContainer(Element el, float x, float y) {
+        if (el.isContainer()) return;
+        Element c = containerAt(x, y);
+        if (c == null) return;
+        if (c.group == 0) c.group = newGroup();
+        el.group = c.group;
+    }
+
+    /** 테이프 아래 내용과 묶기 */
+    private int attachTape(TapeElem t) {
+        if (t.group == 0) t.group = newGroup();
+        int n = 0;
+        for (Element e : activeLayer().elems) {
+            if (e == t || e.isContainer() || e.locked) continue;
+            if (!RectF.intersects(t.bounds(), e.bounds())) continue;
+            boolean under = false;
+            if (e instanceof StrokeElem) {
+                StrokeElem s = (StrokeElem) e;
+                for (int i = 0; i < s.n && !under; i++) under = t.hit(s.pts[3 * i], s.pts[3 * i + 1], 0);
+            } else {
+                under = t.hit(e.centerX(), e.centerY(), 0);
+            }
+            if (under) {
+                e.group = t.group;
+                n++;
+            }
+        }
+        return n;
+    }
+
+    /** 선택한 테이프를 아래 내용에 붙이기(true) / 떼기(false) */
+    public int attachSelectedTapes(boolean attach) {
+        int n = 0;
+        for (Element e : new ArrayList<>(selection)) {
+            if (!(e instanceof TapeElem)) continue;
+            if (attach) {
+                n += attachTape((TapeElem) e);
+            } else {
+                int g = e.group;
+                if (g != 0) for (Element o : activeLayer().elems) if (o != e && o.group == g) {
+                    o.group = 0;
+                    n++;
+                }
+                e.group = 0;
+            }
+        }
+        clearSelection();
+        changed();
+        return n;
+    }
+
+    public boolean selectionHasTape() {
+        for (Element e : selection) if (e instanceof TapeElem) return true;
+        return false;
+    }
+
+    public MemoElem singleSelectedMemo() {
+        MemoElem m = null;
+        for (Element e : selection) if (e instanceof MemoElem) {
+            if (m != null) return null;
+            m = (MemoElem) e;
+        }
+        return m;
+    }
+
+    public void setMemoPattern(MemoElem m, int pattern) {
+        replaceSelection(e -> e == m ? m.withPattern(pattern) : e);
+    }
+
+    /** 현재 선택 항목의 복사본 (스티커 저장용) */
+    public ArrayList<Element> selectionCopy() {
+        ArrayList<Element> out = new ArrayList<>();
+        for (Element e : selection) {
+            Element c = e.transformed(0, 0, 1, 0, 0);
+            c.group = e.group;
+            out.add(c);
+        }
+        return out;
+    }
+
+    public RectF selectionBounds() {
+        return selBounds == null ? null : new RectF(selBounds);
+    }
+
+    /** 선택한 손글씨(형광펜 제외) 획 */
+    public ArrayList<StrokeElem> selectedStrokes() {
+        ArrayList<StrokeElem> out = new ArrayList<>();
+        for (Element e : selection) if (e instanceof StrokeElem && !((StrokeElem) e).isHighlighter()) out.add((StrokeElem) e);
+        return out;
+    }
+
+    /** 요소 묶음을 화면 가운데에 넣고 선택 (스티커) */
+    public void insertElements(java.util.List<Element> elems) {
+        if (elems.isEmpty()) return;
+        RectF b = null;
+        for (Element e : elems) {
+            if (b == null) b = new RectF(e.bounds());
+            else b.union(e.bounds());
+        }
+        RectF vis = visibleWorld();
+        float maxW = vis.width() * 0.6f;
+        float s = b.width() > maxW ? maxW / b.width() : 1f;
+        float dx = vis.centerX() - b.centerX(), dy = vis.centerY() - b.centerY();
+        java.util.HashMap<Integer, Integer> gmap = new java.util.HashMap<>();
+        ArrayList<Element> placed = new ArrayList<>();
+        for (Element e : elems) {
+            Element c = e.transformed(dx, dy, s, b.centerX(), b.centerY());
+            if (e.group != 0) {
+                Integer ng = gmap.get(e.group);
+                if (ng == null) {
+                    ng = newGroup();
+                    gmap.put(e.group, ng);
+                }
+                c.group = ng;
+            }
+            placed.add(c);
+        }
+        Layer l = activeLayer();
+        ArrayList<Element> before = new ArrayList<>(l.elems);
+        l.elems.addAll(placed);
+        pushElems(l, before);
+        changed();
+        select(placed);
+        if (listener != null) listener.onLongPressSelected();
+    }
+
+    /** 선택 영역 옆에 텍스트 추가 (손글씨 → 텍스트) */
+    public void addTextBeside(RectF near, String text, float size) {
+        TextElem.Style st = textStyle.copy();
+        st.size = size;
+        float x = near.right + 24, y = near.top;
+        Page p = page();
+        TextElem probe = new TextElem(x, y, text, st, 0);
+        if (!p.isInfinite() && probe.bounds().right > p.w - 10) {
+            x = near.left;
+            y = near.bottom + 16;
+        }
+        TextElem t = new TextElem(x, y, text, st, 0);
+        Layer l = activeLayer();
+        ArrayList<Element> before = new ArrayList<>(l.elems);
+        l.elems.add(t);
+        pushElems(l, before);
+        clearSelection();
+        changed();
     }
 
     /** 선택 항목 고정 */
@@ -656,7 +848,19 @@ public class CanvasView extends View {
         Layer l = activeLayer();
         ArrayList<Element> before = new ArrayList<>(l.elems);
         ArrayList<Element> copies = new ArrayList<>();
-        for (Element e : selection) copies.add(e.transformed(30, 30, 1, 0, 0));
+        java.util.HashMap<Integer, Integer> gmap = new java.util.HashMap<>();
+        for (Element e : selection) {
+            Element c = e.transformed(30, 30, 1, 0, 0);
+            if (e.group != 0) {
+                Integer ng = gmap.get(e.group);
+                if (ng == null) {
+                    ng = newGroup();
+                    gmap.put(e.group, ng);
+                }
+                c.group = ng;
+            }
+            copies.add(c);
+        }
         l.elems.addAll(copies);
         pushElems(l, before);
         changed();
@@ -699,6 +903,10 @@ public class CanvasView extends View {
         for (Element e : selection) {
             int idx = l.elems.indexOf(e);
             Element ne = fn.apply(e);
+            if (ne != e) {
+                ne.group = e.group;
+                ne.locked = e.locked;
+            }
             if (idx >= 0) l.elems.set(idx, ne);
             newSel.add(ne);
         }
@@ -836,6 +1044,7 @@ public class CanvasView extends View {
         Page p = page();
         if (!p.isInfinite()) canvas.clipRect(0, 0, p.w, p.h);
         if (current != null) current.draw(canvas, rc);
+        if (previewElem != null) previewElem.draw(canvas, rc);
         if (!selection.isEmpty()) {
             ArrayList<Element> list = selPreview != null ? selPreview : selection;
             for (Element e : list) e.draw(canvas, rc);
@@ -1055,6 +1264,14 @@ public class CanvasView extends View {
     }
 
     private void fingerTap(float sx, float sy) {
+        if (!tapeWriteMode) {
+            switchToPageAt(sx, sy);
+            TapeElem tp = tapeAt(wx(sx), wy(sy));
+            if (tp != null) {
+                toggleTape(tp);
+                return;
+            }
+        }
         if (tool == TOOL_TEXT) {
             switchToPageAt(sx, sy);
             textTap(wx(sx), wy(sy));
@@ -1096,6 +1313,15 @@ public class CanvasView extends View {
         }
         if (!onSelection) switchToPageAt(sx, sy);
         float x = wx(sx), y = wy(sy);
+        // 테이프 터치 → 잠깐 투명하게 / 다시 가리기 (테이프 쓰기 모드가 꺼져 있을 때)
+        if (!tapeWriteMode && (t == TOOL_PEN || t == TOOL_HIGHLIGHTER || t == TOOL_TEXT || t == TOOL_SHAPE || t == TOOL_MEMO)) {
+            TapeElem tp = tapeAt(x, y);
+            if (tp != null) {
+                tapTarget = tp;
+                inputKind = IN_TAPE_TAP;
+                return;
+            }
+        }
         lastSx = sx;
         lastSy = sy;
         if (t != TOOL_LASSO && t != TOOL_TEXT && t != TOOL_ERASER) clearSelection();
@@ -1170,6 +1396,19 @@ public class CanvasView extends View {
                 scheduleLongPress(sx, sy);
                 break;
             }
+            case TOOL_TAPE: {
+                inputKind = IN_TAPE;
+                tapeX0 = x;
+                tapeY0 = y;
+                current = null;
+                break;
+            }
+            case TOOL_MEMO: {
+                inputKind = IN_MEMO;
+                shapeX0 = x;
+                shapeY0 = y;
+                break;
+            }
             default:
                 inputKind = IN_NONE;
         }
@@ -1237,6 +1476,21 @@ public class CanvasView extends View {
                 invalidate();
                 break;
             }
+            case IN_TAPE: {
+                float x = wx(sx), y = wy(sy);
+                double ang = Math.toDegrees(Math.atan2(y - tapeY0, x - tapeX0));
+                if (Math.abs(ang) < 6 || Math.abs(Math.abs(ang) - 180) < 6) y = tapeY0;      // 수평 맞춤
+                else if (Math.abs(Math.abs(ang) - 90) < 6) x = tapeX0;                       // 수직 맞춤
+                previewElem = new TapeElem(tapeX0, tapeY0, x, y, tapeWidth, tapeColor, tapePattern);
+                invalidate();
+                break;
+            }
+            case IN_MEMO: {
+                float x = wx(sx), y = wy(sy);
+                previewElem = new MemoElem(Math.min(shapeX0, x), Math.min(shapeY0, y), Math.abs(x - shapeX0), Math.abs(y - shapeY0), memoColor, memoPattern);
+                invalidate();
+                break;
+            }
             case IN_SHAPE: {
                 current = ShapeRecognizer.build(shapeType, shapeX0, shapeY0, wx(sx), wy(sy),
                         new StrokeElem(penType, penColor, penSquare), penWidth);
@@ -1276,6 +1530,7 @@ public class CanvasView extends View {
                         break;
                     }
                     Element done = snapped ? current : current.smoothResampled(Math.max(1.5f, 3f / scale));
+                    joinContainer(done, current.pts[0], current.pts[1]);
                     commitElement(done);
                 }
                 current = null;
@@ -1310,7 +1565,10 @@ public class CanvasView extends View {
             case IN_SHAPE: {
                 if (current != null) {
                     RectF b = current.bounds();
-                    if (b.width() * scale > 6 || b.height() * scale > 6) commitElement(current);
+                    if (b.width() * scale > 6 || b.height() * scale > 6) {
+                        joinContainer(current, shapeX0, shapeY0);
+                        commitElement(current);
+                    }
                 }
                 current = null;
                 break;
@@ -1318,6 +1576,32 @@ public class CanvasView extends View {
             case IN_TAP: {
                 handler.removeCallbacks(longPressRunnable);
                 if (!movedFar) textTap(wx(e.getX(idx)), wy(e.getY(idx)));
+                break;
+            }
+            case IN_TAPE_TAP: {
+                if (!movedFar && tapTarget != null) toggleTape(tapTarget);
+                tapTarget = null;
+                break;
+            }
+            case IN_TAPE: {
+                if (previewElem instanceof TapeElem) {
+                    TapeElem tp = (TapeElem) previewElem;
+                    if (Math.hypot(tp.x1 - tp.x0, tp.y1 - tp.y0) * scale > 16 * density) {
+                        commitContainer(tp);
+                        if (tapeAutoAttach) attachTape(tp);
+                    }
+                }
+                previewElem = null;
+                break;
+            }
+            case IN_MEMO: {
+                MemoElem m = previewElem instanceof MemoElem ? (MemoElem) previewElem : null;
+                if (m == null || m.w * scale < 30 * density || m.h * scale < 30 * density) {
+                    m = new MemoElem(shapeX0, shapeY0, 360, 320, memoColor, memoPattern); // 탭하면 기본 크기
+                }
+                m.group = newGroup();
+                commitContainer(m);
+                previewElem = null;
                 break;
             }
             default:
@@ -1328,6 +1612,8 @@ public class CanvasView extends View {
     }
 
     private void cancelInput() {
+        previewElem = null;
+        tapTarget = null;
         handler.removeCallbacks(holdRunnable);
         handler.removeCallbacks(longPressRunnable);
         snapBase = null;
@@ -1452,7 +1738,8 @@ public class CanvasView extends View {
             if (!l.visible) continue;
             for (int i = l.elems.size() - 1; i >= 0; i--) {
                 Element e = l.elems.get(i);
-                boolean target = e instanceof TextElem || e instanceof ImageElem || e.locked;
+                boolean target = e instanceof TextElem || e instanceof ImageElem || e instanceof MemoElem
+                        || e instanceof TapeElem || e.locked;
                 if (!target || !e.hit(x, y, 6 / scale)) continue;
                 handler.removeCallbacks(holdRunnable);
                 current = null;
@@ -1483,6 +1770,38 @@ public class CanvasView extends View {
                 return;
             }
         }
+    }
+
+    private TapeElem tapeAt(float x, float y) {
+        Page p = page();
+        for (int li = p.layers.size() - 1; li >= 0; li--) {
+            Layer l = p.layers.get(li);
+            if (!l.visible) continue;
+            for (int i = l.elems.size() - 1; i >= 0; i--) {
+                Element e = l.elems.get(i);
+                if (e instanceof TapeElem && e.hit(x, y, 2 / scale)) return (TapeElem) e;
+            }
+        }
+        return null;
+    }
+
+    private void toggleTape(TapeElem t) {
+        t.revealed = !t.revealed;
+        invalidateScene();
+    }
+
+    /** 페이지의 모든 테이프 한꺼번에 가리기/보이기 */
+    public void setAllTapes(boolean revealed) {
+        for (Layer l : page().layers) for (Element e : l.elems) if (e instanceof TapeElem) ((TapeElem) e).revealed = revealed;
+        invalidateScene();
+    }
+
+    private void commitContainer(Element el) {
+        Layer l = activeLayer();
+        ArrayList<Element> before = new ArrayList<>(l.elems);
+        l.elems.add(el);
+        pushElems(l, before);
+        changed();
     }
 
     // ---------- 낙서해서 지우기 ----------
@@ -1584,7 +1903,10 @@ public class CanvasView extends View {
                     out = new ArrayList<>(l.elems.size());
                     for (int j = 0; j < i; j++) out.add(l.elems.get(j));
                 }
-                if (pieces != null) out.addAll(pieces);
+                if (pieces != null) {
+                    for (StrokeElem pc : pieces) pc.group = e.group;
+                    out.addAll(pieces);
+                }
             } else if (out != null) {
                 out.add(e);
             }
@@ -1606,6 +1928,8 @@ public class CanvasView extends View {
             case 2: return e instanceof StrokeElem && ((StrokeElem) e).isHighlighter();
             case 3: return e instanceof ImageElem;
             case 4: return e instanceof TextElem;
+            case 5: return e instanceof TapeElem;
+            case 6: return e instanceof MemoElem;
             default: return true;
         }
     }

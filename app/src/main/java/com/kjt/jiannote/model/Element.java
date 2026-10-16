@@ -14,6 +14,11 @@ public abstract class Element {
     public static final byte T_TEXT = 2;
     public static final byte T_IMAGE = 3;
     public static final byte T_TEXT2 = 4;
+    public static final byte T_TAPE = 5;
+    public static final byte T_MEMO = 6;
+
+    /** 묶음 번호 (0 = 없음). 테이프·메모지와 그 위의 내용이 함께 움직이도록 */
+    public int group;
 
     /** 고정된 요소는 선택·이동·지우기가 되지 않는다 */
     public boolean locked;
@@ -38,6 +43,11 @@ public abstract class Element {
     /** 크기 조절 시 선 두께를 유지하는 변형 (획은 두께 유지, 나머지는 일반 변형) */
     public Element transformedKeepWidth(float dx, float dy, float s, float px, float py) {
         return transformed(dx, dy, s, px, py);
+    }
+
+    /** 테이프·메모지처럼 다른 요소를 품는 요소 */
+    public boolean isContainer() {
+        return false;
     }
 
     public float centerX() {

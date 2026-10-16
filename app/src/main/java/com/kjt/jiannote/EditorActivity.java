@@ -42,7 +42,7 @@ import java.util.UUID;
 
 /** 노트 편집 화면 */
 public class EditorActivity extends Activity implements CanvasView.Listener, PagePanel.Host, PenPresets.Host {
-    private static final int REQ_IMAGE = 11, REQ_PAGE_IMAGE = 12;
+    private static final int REQ_IMAGE = 11, REQ_PAGE_IMAGE = 12, REQ_STICKER_IMAGE = 13;
     /** 올가미 편집 1회 후 돌아갈 도구 (-1 = 없음) */
     private int returnTool = -1;
 
@@ -56,7 +56,9 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
     private PagePanel pagePanel;
     private boolean dirty;
 
-    private final TextView[] toolBtns = new TextView[7];
+    private final TextView[] toolBtns = new TextView[9];
+    private TextView attachBtn, detachBtn, memoPatBtn;
+    private android.widget.HorizontalScrollView selWrap;
     private TextView undoBtn, redoBtn, pageLabel, zoomLabel, fingerBtn, layerBtn, editTextBtn;
     private LinearLayout selBar;
     private Ui.Dot widthDot;
@@ -68,9 +70,9 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
 
     private static final int[] TOOL_ICONS = {
             R.drawable.ic_ink_pen, R.drawable.ic_ink_highlighter, R.drawable.ic_ink_eraser, R.drawable.ic_lasso_select,
-            R.drawable.ic_shapes, R.drawable.ic_text_fields, R.drawable.ic_pan_tool
+            R.drawable.ic_shapes, R.drawable.ic_text_fields, R.drawable.ic_pan_tool, R.drawable.ic_rectangle, R.drawable.ic_sticky_note_2
     };
-    private static final String[] TOOL_NAMES = {"펜", "형광펜", "지우개", "올가미 선택", "도형", "텍스트", "이동(스크롤)"};
+    private static final String[] TOOL_NAMES = {"펜", "형광펜", "지우개", "올가미 선택", "도형", "텍스트", "이동(스크롤)", "암기 테이프", "메모지"};
     private LinearLayout strip;
     private final android.os.Handler autosave = new android.os.Handler(android.os.Looper.getMainLooper());
     private final Runnable autosaveTick = new Runnable() {
@@ -117,11 +119,15 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
         FrameLayout body = new FrameLayout(this);
         body.addView(canvas, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         selBar = buildSelectionBar();
+        selWrap = new android.widget.HorizontalScrollView(this);
+        selWrap.setHorizontalScrollBarEnabled(false);
+        selWrap.addView(selBar);
         FrameLayout.LayoutParams slp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
                 Gravity.TOP | Gravity.CENTER_HORIZONTAL);
         slp.topMargin = Ui.dp(this, 12);
-        body.addView(selBar, slp);
-        selBar.setVisibility(View.GONE);
+        slp.leftMargin = slp.rightMargin = Ui.dp(this, 12);
+        body.addView(selWrap, slp);
+        selWrap.setVisibility(View.GONE);
         pagePanel = new PagePanel(this, canvas, rc, this);
         body.addView(pagePanel, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         root.addView(body, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
@@ -182,6 +188,13 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
         canvas.eraserHlOnly = prefs.b("eraserHlOnly", false);
         canvas.lassoRect = prefs.b("lassoRect", false);
         canvas.lassoFilter = prefs.i("lassoFilter", 0);
+        canvas.tapeWidth = prefs.f("tapeWidth", 48f);
+        canvas.tapeColor = prefs.i("tapeColor", 0xFFFF8A65);
+        canvas.tapePattern = prefs.i("tapePattern", 1);
+        canvas.tapeWriteMode = prefs.b("tapeWriteMode", false);
+        canvas.tapeAutoAttach = prefs.b("tapeAutoAttach", true);
+        canvas.memoColor = prefs.i("memoColor", 0xFFFFF59D);
+        canvas.memoPattern = prefs.i("memoPattern", 1);
         TextElem.Style ts = canvas.textStyle;
         ts.font = prefs.i("txFont", 1);
         ts.size = prefs.f("textSize", 40f);
@@ -211,6 +224,13 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
         prefs.put("eraserHlOnly", canvas.eraserHlOnly);
         prefs.put("lassoRect", canvas.lassoRect);
         prefs.put("lassoFilter", canvas.lassoFilter);
+        prefs.put("tapeWidth", canvas.tapeWidth);
+        prefs.put("tapeColor", canvas.tapeColor);
+        prefs.put("tapePattern", canvas.tapePattern);
+        prefs.put("tapeWriteMode", canvas.tapeWriteMode);
+        prefs.put("tapeAutoAttach", canvas.tapeAutoAttach);
+        prefs.put("memoColor", canvas.memoColor);
+        prefs.put("memoPattern", canvas.memoPattern);
         TextElem.Style ts = canvas.textStyle;
         prefs.put("txFont", ts.font);
         prefs.put("textSize", ts.size);
@@ -276,6 +296,9 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
         TextView img = icon(R.drawable.ic_image, "이미지 넣기");
         img.setOnClickListener(v -> pickImage());
         bar.addView(img);
+        TextView st = icon(R.drawable.ic_add_reaction, "스티커");
+        st.setOnClickListener(v -> showStickers());
+        bar.addView(st);
         bar.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
 
         // 오른쪽: 레이어 · 손가락 · 이동 · 더보기
@@ -314,7 +337,7 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
     }
 
     private static final float[][] WIDTH_PRESETS = {
-            {2, 4, 8}, {16, 26, 44}, {14, 28, 56}, {}, {2, 4, 8}, {28, 40, 64}, {}
+            {2, 4, 8}, {16, 26, 44}, {14, 28, 56}, {}, {2, 4, 8}, {28, 40, 64}, {}, {32, 48, 72}, {}
     };
 
     private void updateStrip() {
@@ -334,7 +357,7 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
                 strip.addView(t);
             }
             strip.addView(Ui.divider(this, true));
-            String[] filters = {"전체", "펜만", "형광펜만", "이미지만", "텍스트만"};
+            String[] filters = {"전체", "펜만", "형광펜만", "이미지만", "텍스트만", "테이프만", "메모지만"};
             for (int i = 0; i < filters.length; i++) {
                 final int f = i;
                 TextView t = stripChip(filters[i], canvas.lassoFilter == i);
@@ -346,6 +369,56 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
                 strip.addView(t);
             }
             return;
+        }
+        if (tool == CanvasView.TOOL_MEMO) {
+            for (int c : com.kjt.jiannote.model.MemoElem.COLORS) {
+                Ui.Swatch sw = new Ui.Swatch(this, c);
+                sw.setChosen(c == canvas.memoColor);
+                sw.setOnClickListener(v -> {
+                    canvas.memoColor = c;
+                    updateStrip();
+                });
+                strip.addView(sw, new LinearLayout.LayoutParams(Ui.dp(this, 36), Ui.dp(this, 36)));
+            }
+            strip.addView(Ui.divider(this, true));
+            for (int i = 0; i < com.kjt.jiannote.model.MemoElem.PATTERN_NAMES.length; i++) {
+                final int pt = i;
+                TextView t = stripChip(com.kjt.jiannote.model.MemoElem.PATTERN_NAMES[i], canvas.memoPattern == i);
+                t.setOnClickListener(v -> {
+                    canvas.memoPattern = pt;
+                    updateStrip();
+                });
+                strip.addView(t);
+            }
+            strip.addView(Ui.divider(this, true));
+            strip.addView(Ui.label(this, "탭 또는 끌어서 붙이기", 12, Ui.SUBTEXT, false));
+            return;
+        }
+        if (tool == CanvasView.TOOL_TAPE) {
+            for (int i = 0; i < com.kjt.jiannote.model.TapeElem.PATTERN_NAMES.length; i++) {
+                final int pt = i;
+                TextView t = stripChip(com.kjt.jiannote.model.TapeElem.PATTERN_NAMES[i], canvas.tapePattern == i);
+                t.setOnClickListener(v -> {
+                    canvas.tapePattern = pt;
+                    updateStrip();
+                });
+                strip.addView(t);
+            }
+            strip.addView(Ui.divider(this, true));
+            TextView wm = stripChip(canvas.tapeWriteMode ? "테이프 위에 쓰기: 켜짐" : "테이프 위에 쓰기: 꺼짐", canvas.tapeWriteMode);
+            wm.setOnClickListener(v -> {
+                canvas.tapeWriteMode = !canvas.tapeWriteMode;
+                Toast.makeText(this, canvas.tapeWriteMode ? "테이프 위에 글씨를 쓸 수 있어요" : "테이프를 터치하면 보이기/가리기", Toast.LENGTH_SHORT).show();
+                updateStrip();
+            });
+            strip.addView(wm);
+            TextView show = stripChip("모두 보이기", false);
+            show.setOnClickListener(v -> canvas.setAllTapes(true));
+            strip.addView(show);
+            TextView hide = stripChip("모두 가리기", false);
+            hide.setOnClickListener(v -> canvas.setAllTapes(false));
+            strip.addView(hide);
+            strip.addView(Ui.divider(this, true));
         }
         if (tool == CanvasView.TOOL_HAND) {
             strip.addView(Ui.label(this, "손가락·펜으로 페이지를 스크롤하고 두 손가락으로 확대/축소 · 텍스트·이미지를 꾹 누르면 편집", 13, Ui.SUBTEXT, false));
@@ -430,6 +503,7 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
             case CanvasView.TOOL_HIGHLIGHTER: return canvas.hlWidth;
             case CanvasView.TOOL_ERASER: return canvas.eraserSize;
             case CanvasView.TOOL_TEXT: return canvas.textStyle.size;
+            case CanvasView.TOOL_TAPE: return canvas.tapeWidth;
             default: return canvas.penWidth;
         }
     }
@@ -439,6 +513,7 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
             case CanvasView.TOOL_HIGHLIGHTER: canvas.hlWidth = w; break;
             case CanvasView.TOOL_ERASER: canvas.eraserSize = w; break;
             case CanvasView.TOOL_TEXT: canvas.textStyle.size = w; break;
+            case CanvasView.TOOL_TAPE: canvas.tapeWidth = w; break;
             default: canvas.penWidth = w; break;
         }
         updateDot();
@@ -491,6 +566,8 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
         switch (canvas.tool) {
             case CanvasView.TOOL_HIGHLIGHTER: return canvas.hlColor;
             case CanvasView.TOOL_TEXT: return canvas.textStyle.color;
+            case CanvasView.TOOL_TAPE: return canvas.tapeColor;
+            case CanvasView.TOOL_MEMO: return canvas.memoColor;
             default: return canvas.penColor;
         }
     }
@@ -504,6 +581,10 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
             canvas.hlColor = c;
         } else if (canvas.tool == CanvasView.TOOL_TEXT) {
             canvas.textStyle.color = c;
+        } else if (canvas.tool == CanvasView.TOOL_TAPE) {
+            canvas.tapeColor = c;
+        } else if (canvas.tool == CanvasView.TOOL_MEMO) {
+            canvas.memoColor = c | 0xFF000000;
         } else {
             canvas.penColor = c;
             if (canvas.tool == CanvasView.TOOL_ERASER || canvas.tool == CanvasView.TOOL_HAND || canvas.tool == CanvasView.TOOL_LASSO) {
@@ -536,8 +617,10 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
         bar.setBackground(Ui.round(0xFF2B2B33, Ui.dp(this, 24)));
         bar.setElevation(Ui.dp(this, 6));
         bar.setPadding(Ui.dp(this, 10), Ui.dp(this, 4), Ui.dp(this, 10), Ui.dp(this, 4));
-        int[] icons = {R.drawable.ic_edit, R.drawable.ic_delete, R.drawable.ic_content_copy, R.drawable.ic_palette, R.drawable.ic_layers, R.drawable.ic_lock, R.drawable.ic_close};
-        String[] labels = {"글자편집", "삭제", "복제", "색상", "레이어로", "고정", "해제"};
+        int[] icons = {R.drawable.ic_edit, R.drawable.ic_delete, R.drawable.ic_content_copy, R.drawable.ic_palette, R.drawable.ic_layers,
+                R.drawable.ic_lock, R.drawable.ic_link, R.drawable.ic_link_off, R.drawable.ic_grid_view, R.drawable.ic_title,
+                R.drawable.ic_add_reaction, R.drawable.ic_close};
+        String[] labels = {"글자편집", "삭제", "복제", "색상", "레이어로", "고정", "붙이기", "떼기", "양식", "텍스트로", "스티커로", "해제"};
         for (int i = 0; i < icons.length; i++) {
             TextView t = Ui.iconButton(this, icons[i], labels[i]);
             Ui.tintIcon(t, 0xFFFFFFFF);
@@ -553,13 +636,111 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
                         canvas.lockSelection();
                         Toast.makeText(this, "고정했습니다. 꾹 누르면 고정을 풀 수 있어요", Toast.LENGTH_SHORT).show();
                         break;
+                    case 6: {
+                        int n = canvas.attachSelectedTapes(true);
+                        Toast.makeText(this, n > 0 ? "테이프를 붙였습니다. 이제 아래 내용과 함께 움직여요" : "테이프 아래에 붙일 내용이 없습니다", Toast.LENGTH_SHORT).show();
+                        break;
+                    }
+                    case 7:
+                        canvas.attachSelectedTapes(false);
+                        Toast.makeText(this, "테이프를 뗐습니다. 이제 따로 움직여요", Toast.LENGTH_SHORT).show();
+                        break;
+                    case 8: chooseMemoPattern(); break;
+                    case 9: handwritingToText(); break;
+                    case 10: saveSelectionAsSticker(); break;
                     default: canvas.clearSelection(); break;
                 }
             });
             if (i == 0) editTextBtn = t;
+            if (i == 6) attachBtn = t;
+            if (i == 7) detachBtn = t;
+            if (i == 8) memoPatBtn = t;
             bar.addView(t);
         }
         return bar;
+    }
+
+    private void showStickers() {
+        Stickers.show(this, rc, elems -> canvas.insertElements(elems), () -> {
+            Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            i.addCategory(Intent.CATEGORY_OPENABLE);
+            i.setType("image/*");
+            startActivityForResult(i, REQ_STICKER_IMAGE);
+        });
+    }
+
+    private void saveSelectionAsSticker() {
+        try {
+            Stickers.addClip(this, canvas.selectionCopy(), rc);
+            Toast.makeText(this, "내 스티커에 저장했습니다", Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            Toast.makeText(this, "스티커 저장 실패: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void chooseMemoPattern() {
+        com.kjt.jiannote.model.MemoElem m = canvas.singleSelectedMemo();
+        if (m == null) return;
+        new AlertDialog.Builder(this).setTitle("메모지 양식")
+                .setItems(com.kjt.jiannote.model.MemoElem.PATTERN_NAMES, (d, w) -> canvas.setMemoPattern(m, w))
+                .show();
+    }
+
+    /** 선택한 손글씨를 텍스트로 (손글씨는 그대로, 옆에 텍스트 생성) */
+    private void handwritingToText() {
+        java.util.ArrayList<StrokeElem> strokes = canvas.selectedStrokes();
+        android.graphics.RectF near = canvas.selectionBounds();
+        if (strokes.isEmpty() || near == null) {
+            Toast.makeText(this, "올가미로 손글씨를 선택하세요", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        LinearLayout box = Ui.row(this);
+        int pd = Ui.dp(this, 24);
+        box.setPadding(pd, pd, pd, pd);
+        box.addView(new android.widget.ProgressBar(this));
+        TextView msg = Ui.label(this, "손글씨를 읽는 중…", 15, Ui.TEXT, false);
+        msg.setPadding(Ui.dp(this, 16), 0, 0, 0);
+        box.addView(msg);
+        AlertDialog pdlg = new AlertDialog.Builder(this).setView(box).setCancelable(true).create();
+        pdlg.show();
+        HandwritingRecognizer.recognize(this, strokes, new HandwritingRecognizer.Cb() {
+            @Override
+            public void ok(String text, float lineHeight) {
+                pdlg.dismiss();
+                // 결과 확인·수정 후 넣기
+                android.widget.EditText e = new android.widget.EditText(EditorActivity.this);
+                e.setText(text);
+                e.setSelection(text.length());
+                LinearLayout b = Ui.col(EditorActivity.this);
+                int p = Ui.dp(EditorActivity.this, 20);
+                b.setPadding(p, Ui.dp(EditorActivity.this, 8), p, 0);
+                b.addView(e);
+                new AlertDialog.Builder(EditorActivity.this).setTitle("인식 결과 (고칠 수 있어요)").setView(b)
+                        .setNegativeButton("취소", null)
+                        .setNeutralButton("복사", (d, w) -> {
+                            android.content.ClipboardManager cm = (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                            cm.setPrimaryClip(android.content.ClipData.newPlainText("JianNote", e.getText().toString()));
+                            Toast.makeText(EditorActivity.this, "복사했습니다", Toast.LENGTH_SHORT).show();
+                        })
+                        .setPositiveButton("텍스트 넣기", (d, w) -> {
+                            String t = e.getText().toString().trim();
+                            if (t.isEmpty()) return;
+                            float size = Math.max(20f, Math.min(120f, lineHeight * 0.7f));
+                            canvas.addTextBeside(near, t, size);
+                        }).show();
+            }
+
+            @Override
+            public void fail(String m) {
+                pdlg.dismiss();
+                Toast.makeText(EditorActivity.this, m, Toast.LENGTH_LONG).show();
+            }
+
+            @Override
+            public void progress(String m) {
+                msg.setText(m);
+            }
+        });
     }
 
     private void editSelectedText() {
@@ -797,6 +978,30 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
                 width = 440;
                 box.addView(Ui.label(this, "텍스트를 넣을 곳을 탭하세요. 기존 텍스트를 탭하면 수정합니다.\n아래 서식은 새로 입력하는 텍스트에 적용됩니다.", 13, Ui.TEXT, false));
                 box.addView(TextTools.controls(this, canvas.textStyle, this::updateDot));
+                break;
+            case CanvasView.TOOL_TAPE:
+                box.addView(Ui.label(this, "암기 테이프: 가릴 곳 위로 끌어서 붙이세요.\n• 테이프를 터치하면 잠깐 투명해지고, 다시 터치하면 가려져요\n• '테이프 위에 쓰기'를 켜면 테이프 위에 글씨를 쓸 수 있어요\n• 붙일 때 아래 글씨·텍스트·이미지와 자동으로 묶여 함께 움직여요 (올가미로 선택 → 붙이기/떼기)", 13, Ui.TEXT, false));
+                {
+                    CheckBox auto = new CheckBox(this);
+                    auto.setText("붙일 때 아래 내용과 자동으로 묶기");
+                    auto.setChecked(canvas.tapeAutoAttach);
+                    auto.setOnCheckedChangeListener((b, c) -> canvas.tapeAutoAttach = c);
+                    box.addView(auto);
+                    TextView wl = title("두께: " + fmt(canvas.tapeWidth));
+                    box.addView(wl);
+                    box.addView(Ui.seek(this, 100, (int) canvas.tapeWidth - 16, v -> {
+                        canvas.tapeWidth = v + 16;
+                        wl.setText("두께: " + fmt(canvas.tapeWidth));
+                    }));
+                    box.addView(title("색상"));
+                    box.addView(ColorPicker.grid(this, new int[]{0xFFFF8A65, 0xFF81D4FA, 0xFFA5D6A7, 0xFFF48FB1, 0xFFFFE082, 0xFFB0BEC5, 0xFF9575CD, 0xFF4E342E},
+                            canvas.tapeColor, c -> canvas.tapeColor = c));
+                }
+                break;
+            case CanvasView.TOOL_MEMO:
+                box.addView(Ui.label(this, "메모지: 탭하면 기본 크기로, 끌면 원하는 크기로 붙어요.\n• 메모지 위에 쓴 손글씨·텍스트는 메모지와 함께 움직여요\n• 메모지를 꾹 누르면 바로 옮기거나 양식·색을 바꿀 수 있어요", 13, Ui.TEXT, false));
+                box.addView(title("색상"));
+                box.addView(ColorPicker.grid(this, com.kjt.jiannote.model.MemoElem.COLORS, canvas.memoColor, c -> canvas.memoColor = c | 0xFF000000));
                 break;
             case CanvasView.TOOL_LASSO:
                 box.addView(Ui.label(this, "올가미로 영역을 둘러 선택하세요.\n• 선택 상자 안을 끌면 이동\n• 오른쪽 아래 파란 점을 끌면 크기 조절 (선 두께는 그대로)\n• 위쪽 막대에서 글자편집·삭제·복제·색상·레이어 이동·고정\n• 아래 줄에서 자유/사각형 올가미와 선택할 종류(펜만·형광펜만·이미지만·텍스트만)를 고를 수 있어요\n• 다른 도구에서 올가미로 바꿨다면, 편집 한 번 뒤 원래 도구로 돌아갑니다", 14, Ui.TEXT, false));
@@ -1234,6 +1439,16 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
     @Override
     protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
+        if (req == REQ_STICKER_IMAGE && res == RESULT_OK && data != null && data.getData() != null) {
+            try {
+                Stickers.addImage(this, data.getData());
+                Toast.makeText(this, "내 스티커에 추가했습니다", Toast.LENGTH_SHORT).show();
+                showStickers();
+            } catch (Exception e) {
+                Toast.makeText(this, "스티커 만들기 실패: " + e.getMessage(), Toast.LENGTH_LONG).show();
+            }
+            return;
+        }
         if (req == REQ_PAGE_IMAGE && res == RESULT_OK && data != null) {
             java.util.ArrayList<Uri> uris = new java.util.ArrayList<>();
             if (data.getClipData() != null) {
@@ -1346,8 +1561,12 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
 
     @Override
     public void onSelectionChanged(boolean has) {
-        selBar.setVisibility(has ? View.VISIBLE : View.GONE);
+        selWrap.setVisibility(has ? View.VISIBLE : View.GONE);
         if (editTextBtn != null) editTextBtn.setVisibility(canvas.singleSelectedText() != null ? View.VISIBLE : View.GONE);
+        boolean tape = has && canvas.selectionHasTape();
+        if (attachBtn != null) attachBtn.setVisibility(tape ? View.VISIBLE : View.GONE);
+        if (detachBtn != null) detachBtn.setVisibility(tape ? View.VISIBLE : View.GONE);
+        if (memoPatBtn != null) memoPatBtn.setVisibility(has && canvas.singleSelectedMemo() != null ? View.VISIBLE : View.GONE);
     }
 
     @Override
