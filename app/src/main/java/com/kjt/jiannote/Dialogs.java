@@ -99,11 +99,26 @@ public class Dialogs {
         title.setSingleLine(true);
         root.addView(title);
 
-        root.addView(section(a, "노트 종류"));
+        root.addView(section(a, "시작 방법"));
+        RadioGroup start = new RadioGroup(a);
+        start.setOrientation(RadioGroup.HORIZONTAL);
+        String[] startNames = {"빈 노트", "사진으로 시작", "PDF로 시작"};
+        RadioButton[] startBtns = new RadioButton[3];
+        for (int i = 0; i < 3; i++) {
+            startBtns[i] = new RadioButton(a);
+            startBtns[i].setText(startNames[i]);
+            startBtns[i].setId(View.generateViewId());
+            start.addView(startBtns[i]);
+        }
+        startBtns[0].setChecked(true);
+        root.addView(start);
+        root.addView(Ui.label(a, "사진·PDF로 시작하면 고른 사진·PDF 페이지가 노트의 페이지가 됩니다.", 11, Ui.SUBTEXT, false));
+
+        root.addView(section(a, "첫 페이지 종류"));
         RadioGroup type = new RadioGroup(a);
         type.setOrientation(RadioGroup.HORIZONTAL);
         RadioButton rbPaged = new RadioButton(a);
-        rbPaged.setText("일반 노트 (A4 페이지)");
+        rbPaged.setText("일반 페이지");
         rbPaged.setId(View.generateViewId());
         RadioButton rbInf = new RadioButton(a);
         rbInf.setText("무한 캔버스");
@@ -112,6 +127,13 @@ public class Dialogs {
         type.addView(rbInf);
         rbPaged.setChecked(true);
         root.addView(type);
+        root.addView(Ui.label(a, "노트 안에서 일반 페이지와 무한 캔버스 페이지를 언제든 섞어서 추가할 수 있어요.", 11, Ui.SUBTEXT, false));
+        start.setOnCheckedChangeListener((g, id) -> {
+            boolean blank = id == startBtns[0].getId();
+            rbPaged.setEnabled(blank);
+            rbInf.setEnabled(blank);
+            if (!blank) rbPaged.setChecked(true);
+        });
 
         root.addView(section(a, "방향"));
         RadioGroup ori = new RadioGroup(a);
@@ -286,6 +308,8 @@ public class Dialogs {
                     m.title = t.isEmpty() ? (rbInf.isChecked() ? "무한 캔버스" : "새 노트") : t;
                     m.infinite = rbInf.isChecked();
                     m.landscape = !m.infinite && rbLand.isChecked();
+                    m.startFrom = startBtns[1].isChecked() ? 1 : startBtns[2].isChecked() ? 2 : 0;
+                    if (m.startFrom != 0) m.infinite = false;
                     cb.on(m);
                 })
                 .show();

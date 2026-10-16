@@ -62,6 +62,18 @@ public class NotebookMeta {
         return m;
     }
 
+    /** 새 노트를 무엇으로 시작할지 (저장하지 않음): 0=빈 노트 1=사진 2=PDF */
+    public transient int startFrom;
+
+    /** 일반 페이지 크기 (무한 캔버스 노트에 일반 페이지를 추가할 때도 사용) */
+    public float pagedW() {
+        return PageSize.px(landscape ? Math.max(sizeWmm, sizeHmm) : Math.min(sizeWmm, sizeHmm));
+    }
+
+    public float pagedH() {
+        return PageSize.px(landscape ? Math.min(sizeWmm, sizeHmm) : Math.max(sizeWmm, sizeHmm));
+    }
+
     public float pageW() {
         if (infinite) return 0;
         return PageSize.px(landscape ? Math.max(sizeWmm, sizeHmm) : Math.min(sizeWmm, sizeHmm));

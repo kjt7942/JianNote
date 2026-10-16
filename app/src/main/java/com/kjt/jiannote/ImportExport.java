@@ -60,6 +60,10 @@ public class ImportExport {
     // ================= PDF 가져오기 =================
 
     public static void importPdf(Activity a, Store store, Uri uri, String title, Progress progress, Done<NotebookMeta> done) {
+        importPdf(a, store, uri, title, null, progress, done);
+    }
+
+    public static void importPdf(Activity a, Store store, Uri uri, String title, NotebookMeta base, Progress progress, Done<NotebookMeta> done) {
         run(() -> {
             File tmp = new File(a.getCacheDir(), "import.pdf");
             NotebookMeta meta = null;
@@ -69,11 +73,8 @@ public class ImportExport {
                      PdfRenderer pdf = new PdfRenderer(fd)) {
                     int n = Math.min(pdf.getPageCount(), MAX_PDF_PAGES);
                     if (n == 0) throw new IOException("페이지가 없는 PDF입니다");
-                    NotebookMeta m = new NotebookMeta();
-                    m.title = title;
-                    m.coverColor = Ui.COVER_COLORS[(int) (Math.random() * Ui.COVER_COLORS.length)];
-                    m.paperColor = 0xFFFFFFFF;
-                    m.template = Paper.BLANK;
+                    NotebookMeta m = base != null ? base : defaultMeta(title);
+                    m.infinite = false;
                     meta = store.create(m);
                     RenderContext rc = new RenderContext(store.dir(meta.id));
                     File imgDir = rc.imagesDir();
@@ -157,6 +158,39 @@ public class ImportExport {
         return p;
     }
 
+    private static NotebookMeta defaultMeta(String title) {
+        NotebookMeta m = new NotebookMeta();
+        m.title = title;
+        m.coverColor = Ui.COVER_COLORS[(int) (Math.random() * Ui.COVER_COLORS.length)];
+        m.paperColor = 0xFFFFFFFF;
+        m.template = Paper.BLANK;
+        return m;
+    }
+
+    /** PDF 한 페이지를 그 크기 그대로의 새 페이지로 (배경 이미지) */
+    public static Page pdfPageAsPage(android.content.Context c, Uri uri, int index, File imgDir) throws IOException {
+        try (ParcelFileDescriptor fd = c.getContentResolver().openFileDescriptor(uri, "r");
+             PdfRenderer pdf = new PdfRenderer(fd);
+             PdfRenderer.Page pg = pdf.openPage(index)) {
+            float pw = pg.getWidth(), ph = pg.getHeight();
+            float w = pw >= ph ? 1754 : 1240;
+            float h = w * ph / Math.max(1f, pw);
+            Bitmap bmp = Bitmap.createBitmap(Math.round(w * 1.25f), Math.round(h * 1.25f), Bitmap.Config.ARGB_8888);
+            bmp.eraseColor(Color.WHITE);
+            pg.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
+            String name = "pdf_" + index + "_" + UUID.randomUUID().toString().substring(0, 6) + ".jpg";
+            try (OutputStream os = new FileOutputStream(new File(imgDir, name))) {
+                bmp.compress(Bitmap.CompressFormat.JPEG, 90, os);
+            }
+            bmp.recycle();
+            Page p = Page.create(w, h, Paper.BLANK);
+            p.bgImage = name;
+            return p;
+        } catch (SecurityException e) {
+            throw new IOException("암호가 걸린 PDF는 사용할 수 없습니다");
+        }
+    }
+
     // ================= 사진·PDF 속지 =================
 
     /** 사진을 속지 이미지(tpl_*.jpg)로 저장하고 파일 이름을 돌려준다 */
@@ -235,14 +269,15 @@ public class ImportExport {
 
     /** 이미지 여러 장을 페이지로 하는 새 노트 */
     public static void importImages(Activity a, Store store, List<Uri> uris, String title, Progress progress, Done<NotebookMeta> done) {
+        importImages(a, store, uris, title, null, progress, done);
+    }
+
+    public static void importImages(Activity a, Store store, List<Uri> uris, String title, NotebookMeta base, Progress progress, Done<NotebookMeta> done) {
         run(() -> {
             NotebookMeta meta = null;
             try {
-                NotebookMeta m = new NotebookMeta();
-                m.title = title;
-                m.coverColor = Ui.COVER_COLORS[(int) (Math.random() * Ui.COVER_COLORS.length)];
-                m.paperColor = 0xFFFFFFFF;
-                m.template = Paper.BLANK;
+                NotebookMeta m = base != null ? base : defaultMeta(title);
+                m.infinite = false;
                 meta = store.create(m);
                 RenderContext rc = new RenderContext(store.dir(meta.id));
                 Document doc = new Document();

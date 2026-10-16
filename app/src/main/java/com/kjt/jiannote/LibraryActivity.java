@@ -58,6 +58,8 @@ public class LibraryActivity extends Activity {
     private LinearLayout catRow;
     private String category = CAT_ALL;
     private NotebookMeta coverTarget;
+    /** 새 노트 창에서 '사진/PDF로 시작'을 고른 경우의 설정 */
+    private NotebookMeta pendingNew;
 
     @Override
     protected void onCreate(Bundle b) {
@@ -442,6 +444,20 @@ public class LibraryActivity extends Activity {
         Dialogs.newNotebook(this, premium, m -> {
             if (!category.equals(CAT_ALL) && !category.equals(CAT_FAV) && !category.equals(CAT_NONE)) m.category = category;
             if (category.equals(CAT_FAV)) m.favorite = true;
+            if (m.startFrom != 0) {
+                // 사진·PDF 를 고른 뒤 그 페이지들로 노트 만들기
+                pendingNew = m;
+                Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                i.addCategory(Intent.CATEGORY_OPENABLE);
+                if (m.startFrom == 1) {
+                    i.setType("image/*");
+                    i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+                } else {
+                    i.setType("application/pdf");
+                }
+                startActivityForResult(i, m.startFrom == 1 ? REQ_IMAGES : REQ_PDF);
+                return;
+            }
             try {
                 open(store.create(m));
             } catch (Exception e) {
@@ -496,6 +512,14 @@ public class LibraryActivity extends Activity {
         i.addCategory(Intent.CATEGORY_OPENABLE);
         i.setType("application/pdf");
         startActivityForResult(i, REQ_PDF);
+    }
+
+    /** 새 노트 창 설정이 있으면 그것을 (제목이 비었으면 파일 이름으로) */
+    private NotebookMeta takePending(String fallbackTitle) {
+        NotebookMeta m = pendingNew;
+        pendingNew = null;
+        if (m != null && (m.title == null || m.title.isEmpty() || m.title.equals("새 노트"))) m.title = fallbackTitle;
+        return m;
     }
 
     private void pickImages() {
@@ -572,7 +596,10 @@ public class LibraryActivity extends Activity {
     @Override
     protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
-        if (res != RESULT_OK || data == null) return;
+        if (res != RESULT_OK || data == null) {
+            pendingNew = null;
+            return;
+        }
         if (req == REQ_IMAGES) {
             ArrayList<Uri> uris = new ArrayList<>();
             if (data.getClipData() != null) {
@@ -584,7 +611,8 @@ public class LibraryActivity extends Activity {
             AlertDialog pd = progress("이미지를 페이지로 가져오는 중…");
             TextView msg = pd.getWindow().getDecorView().findViewWithTag("msg");
             String title = uris.size() == 1 ? displayName(uris.get(0)) : "이미지 노트 (" + uris.size() + "장)";
-            ImportExport.importImages(this, store, uris, title,
+            NotebookMeta base = takePending(title);
+            ImportExport.importImages(this, store, uris, title, base,
                     (d, n) -> {
                         if (msg != null) msg.setText("이미지를 가져오는 중… " + d + " / " + n);
                     },
@@ -625,7 +653,8 @@ public class LibraryActivity extends Activity {
         if (req == REQ_PDF) {
             AlertDialog pd = progress("PDF를 가져오는 중…");
             TextView msg = pd.getWindow().getDecorView().findViewWithTag("msg");
-            ImportExport.importPdf(this, store, uri, displayName(uri),
+            NotebookMeta base = takePending(displayName(uri));
+            ImportExport.importPdf(this, store, uri, displayName(uri), base,
                     (d, n) -> {
                         if (msg != null) msg.setText("PDF를 가져오는 중… " + d + " / " + n + "페이지");
                     },

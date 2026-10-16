@@ -42,7 +42,7 @@ import java.util.UUID;
 
 /** 노트 편집 화면 */
 public class EditorActivity extends Activity implements CanvasView.Listener, PagePanel.Host, PenPresets.Host {
-    private static final int REQ_IMAGE = 11, REQ_PAGE_IMAGE = 12, REQ_STICKER_IMAGE = 13, REQ_TPL_IMAGE = 14, REQ_TPL_PDF = 15;
+    private static final int REQ_IMAGE = 11, REQ_PAGE_IMAGE = 12, REQ_STICKER_IMAGE = 13, REQ_TPL_IMAGE = 14, REQ_TPL_PDF = 15, REQ_PAGE_PDF = 16;
     /** 올가미 편집 1회 후 돌아갈 도구 (-1 = 없음) */
     private int returnTool = -1;
 
@@ -57,7 +57,7 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
     private boolean dirty;
 
     private final TextView[] toolBtns = new TextView[9];
-    private TextView attachBtn, detachBtn, memoPatBtn;
+    private TextView attachBtn, detachBtn, memoPatBtn, homeBtn;
     private android.widget.HorizontalScrollView selWrap;
     private TextView undoBtn, redoBtn, pageLabel, zoomLabel, fingerBtn, layerBtn, editTextBtn;
     private LinearLayout selBar;
@@ -710,33 +710,30 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
         bar.setBackgroundColor(Ui.SURFACE);
         bar.setPadding(Ui.dp(this, 8), Ui.dp(this, 2), Ui.dp(this, 8), Ui.dp(this, 2));
         bar.setGravity(Gravity.CENTER);
-        if (meta.infinite) {
-            TextView home = Ui.iconText(this, R.drawable.ic_my_location, "처음 위치로", Ui.TEXT);
-            home.setOnClickListener(v -> canvas.resetInfiniteView());
-            bar.addView(home);
-            bar.addView(Ui.label(this, "   ∞ 무한 캔버스 — 한 손가락으로 이동, 두 손가락으로 확대/축소   ", 13, Ui.SUBTEXT, false));
-        } else {
-            TextView prev = icon(R.drawable.ic_keyboard_arrow_up, "이전 페이지");
-            prev.setOnClickListener(v -> canvas.goToPage(canvas.pageIndex() - 1));
-            bar.addView(prev);
-            pageLabel = Ui.label(this, "1 / 1", 14, Ui.TEXT, true);
-            pageLabel.setPadding(Ui.dp(this, 10), Ui.dp(this, 10), Ui.dp(this, 10), Ui.dp(this, 10));
-            pageLabel.setOnClickListener(v -> togglePanel());
-            bar.addView(pageLabel);
-            TextView next = icon(R.drawable.ic_keyboard_arrow_down, "다음 페이지");
-            next.setOnClickListener(v -> canvas.goToPage(canvas.pageIndex() + 1));
-            bar.addView(next);
-            bar.addView(Ui.divider(this, true));
-            TextView add = Ui.iconText(this, R.drawable.ic_add, "페이지 추가", Ui.TEXT);
-            add.setOnClickListener(v -> addPage());
-            bar.addView(add);
-            TextView panel = Ui.iconText(this, R.drawable.ic_view_agenda, "페이지 보기", Ui.TEXT);
-            panel.setOnClickListener(v -> togglePanel());
-            bar.addView(panel);
-            TextView pm = Ui.iconText(this, R.drawable.ic_more_vert, "페이지 메뉴", Ui.TEXT);
-            pm.setOnClickListener(this::showPageMenu);
-            bar.addView(pm);
-        }
+        TextView prev = icon(R.drawable.ic_keyboard_arrow_up, "이전 페이지");
+        prev.setOnClickListener(v -> canvas.goToPage(canvas.pageIndex() - 1));
+        bar.addView(prev);
+        pageLabel = Ui.label(this, "1 / 1", 14, Ui.TEXT, true);
+        pageLabel.setPadding(Ui.dp(this, 10), Ui.dp(this, 10), Ui.dp(this, 10), Ui.dp(this, 10));
+        pageLabel.setOnClickListener(v -> togglePanel());
+        bar.addView(pageLabel);
+        TextView next = icon(R.drawable.ic_keyboard_arrow_down, "다음 페이지");
+        next.setOnClickListener(v -> canvas.goToPage(canvas.pageIndex() + 1));
+        bar.addView(next);
+        bar.addView(Ui.divider(this, true));
+        TextView add = Ui.iconText(this, R.drawable.ic_add, "페이지 추가", Ui.TEXT);
+        add.setOnClickListener(this::showAddPageMenu);
+        bar.addView(add);
+        TextView panel = Ui.iconText(this, R.drawable.ic_view_agenda, "페이지 보기", Ui.TEXT);
+        panel.setOnClickListener(v -> togglePanel());
+        bar.addView(panel);
+        TextView pm = Ui.iconText(this, R.drawable.ic_more_vert, "페이지 메뉴", Ui.TEXT);
+        pm.setOnClickListener(this::showPageMenu);
+        bar.addView(pm);
+        // 무한 캔버스 페이지를 보고 있을 때만 보이는 버튼
+        homeBtn = Ui.iconText(this, R.drawable.ic_my_location, "처음 위치로", Ui.TEXT);
+        homeBtn.setOnClickListener(v -> canvas.resetInfiniteView());
+        bar.addView(homeBtn);
         bar.addView(Ui.divider(this, true));
         zoomLabel = Ui.label(this, "100%", 13, Ui.SUBTEXT, false);
         zoomLabel.setPadding(Ui.dp(this, 8), Ui.dp(this, 10), Ui.dp(this, 8), Ui.dp(this, 10));
@@ -750,8 +747,40 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
         else pagePanel.show();
     }
 
+    /** 페이지 추가: 일반 페이지 / 무한 캔버스 / 사진·PDF */
+    private void showAddPageMenu(View anchor) {
+        PopupMenu pm = new PopupMenu(this, anchor);
+        Page cur = canvas.page();
+        String size = com.kjt.jiannote.model.PageSize.label(meta.sizeWmm, meta.sizeHmm);
+        pm.getMenu().add(0, 1, 0, cur.isInfinite() ? "일반 페이지 (" + size + ")" : "일반 페이지 (지금 페이지와 같은 크기·속지)");
+        pm.getMenu().add(0, 2, 1, "무한 캔버스 페이지");
+        pm.getMenu().add(0, 3, 2, "사진으로 페이지 추가");
+        pm.getMenu().add(0, 4, 3, "PDF로 페이지 추가");
+        pm.setOnMenuItemClickListener(item -> {
+            int at = canvas.pageIndex() + 1;
+            switch (item.getItemId()) {
+                case 1: addPage(); break;
+                case 2:
+                    canvas.addPage(Page.create(0, 0, meta.template), at);
+                    Toast.makeText(this, "무한 캔버스 페이지를 추가했습니다", Toast.LENGTH_SHORT).show();
+                    break;
+                case 3: pickPageImage(); break;
+                case 4: pickTemplateFile("application/pdf", REQ_PAGE_PDF); break;
+                default: break;
+            }
+            if (pagePanel.isOpen()) pagePanel.rebuild();
+            return true;
+        });
+        pm.show();
+    }
+
     private void addPage() {
         Page cur = canvas.page();
+        if (cur.isInfinite()) {
+            canvas.addPage(Page.create(meta.pagedW(), meta.pagedH(), meta.template), canvas.pageIndex() + 1);
+            if (pagePanel.isOpen()) pagePanel.rebuild();
+            return;
+        }
         canvas.addPage(cur.blankLike(), canvas.pageIndex() + 1);
         if (pagePanel.isOpen()) pagePanel.rebuild();
     }
@@ -913,7 +942,7 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
     private void chooseBasicTemplate() {
         Page cur = canvas.page();
         boolean land = !cur.isInfinite() && cur.w > cur.h;
-        Dialogs.templatePicker(this, premium, meta.paperColor, land, cur.template, !meta.infinite && canvas.pageCount() > 1,
+        Dialogs.templatePicker(this, premium, meta.paperColor, land, cur.template, !cur.isInfinite() && canvas.pageCount() > 1,
                 (t, all) -> {
                     if (all) {
                         for (Page p : doc.pages) {
@@ -1483,6 +1512,23 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
     @Override
     protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
+        if (req == REQ_PAGE_PDF && res == RESULT_OK && data != null && data.getData() != null) {
+            Uri uri = data.getData();
+            int at = canvas.pageIndex() + 1;
+            try {
+                int n = Math.min(ImportExport.pdfPageCount(this, uri), ImportExport.MAX_PDF_PAGES);
+                for (int i = 0; i < n; i++) {
+                    Page pg = ImportExport.pdfPageAsPage(this, uri, i, rc.imagesDir());
+                    canvas.addPage(pg, at + i);
+                }
+                canvas.goToPage(at);
+                Toast.makeText(this, "PDF " + n + "페이지를 추가했습니다", Toast.LENGTH_SHORT).show();
+                if (pagePanel.isOpen()) pagePanel.rebuild();
+            } catch (Exception e) {
+                Toast.makeText(this, "PDF 페이지 추가 실패: " + e.getMessage(), Toast.LENGTH_LONG).show();
+            }
+            return;
+        }
         if (req == REQ_TPL_IMAGE && res == RESULT_OK && data != null && data.getData() != null) {
             try {
                 applyImageTemplate(ImportExport.templateFromImage(this, data.getData(), rc.imagesDir()));
@@ -1628,6 +1674,7 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
 
     @Override
     public void onPageChanged() {
+        if (homeBtn != null) homeBtn.setVisibility(canvas.isInfinite() ? View.VISIBLE : View.GONE);
         if (pageLabel != null) pageLabel.setText((canvas.pageIndex() + 1) + " / " + canvas.pageCount());
         if (layerPopup != null && layerPopup.isShowing()) refreshLayers();
         if (pagePanel != null) pagePanel.onPageChanged();

@@ -90,6 +90,13 @@ public class CanvasView extends View {
     private float[] pageTop = new float[0];
     private float[] pageLeft = new float[0];
     private float maxPageW = 1, totalH = 1;
+    /** 지금 무한 캔버스 페이지를 보고 있는지 (일반 페이지는 세로 스크롤로 이어서 보여줌) */
+    private boolean viewInfinite;
+    /** 일반 페이지 사이에 보이는 무한 캔버스 카드 높이 */
+    private static final float INF_CARD_H = 520f;
+    private final java.util.HashMap<Page, float[]> infView = new java.util.HashMap<>();
+    private final java.util.HashMap<Page, Bitmap> infThumbs = new java.util.HashMap<>();
+    private final Paint cardPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
     // ---- 도구 설정
     public int tool = TOOL_PEN;
@@ -259,6 +266,7 @@ public class CanvasView extends View {
         this.paperColor = paperColor;
         undo.clear();
         pageIndex = 0;
+        viewInfinite = d.pages.get(0).isInfinite();
         activeLayer = d.pages.get(0).layers.size() - 1;
         relayout();
         post(this::fitPage);
@@ -274,7 +282,18 @@ public class CanvasView extends View {
 
     public int activeLayerIndex() { return activeLayer; }
 
-    public boolean isInfinite() { return doc != null && doc.pages.get(0).isInfinite(); }
+    public boolean isInfinite() { return doc != null && viewInfinite; }
+
+    /** 일반 페이지 화면에서 무한 캔버스 카드의 높이/너비 */
+    private float layoutH(int i) {
+        Page p = doc.pages.get(i);
+        return p.isInfinite() ? INF_CARD_H : p.h;
+    }
+
+    private float layoutW(int i) {
+        Page p = doc.pages.get(i);
+        return p.isInfinite() ? maxPageW : p.w;
+    }
 
     public Layer activeLayer() {
         Page p = page();
@@ -307,37 +326,44 @@ public class CanvasView extends View {
         int n = doc.pages.size();
         pageTop = new float[n];
         pageLeft = new float[n];
-        if (isInfinite()) {
-            maxPageW = 1;
-            totalH = 1;
-            return;
-        }
-        maxPageW = 1;
-        for (Page p : doc.pages) maxPageW = Math.max(maxPageW, p.w);
+        maxPageW = 0;
+        for (Page p : doc.pages) if (!p.isInfinite()) maxPageW = Math.max(maxPageW, p.w);
+        if (maxPageW <= 0) maxPageW = 1240;
         float y = 0;
         for (int i = 0; i < n; i++) {
-            Page p = doc.pages.get(i);
             pageTop[i] = y;
-            pageLeft[i] = (maxPageW - p.w) / 2f;
-            y += p.h + GAP;
+            pageLeft[i] = (maxPageW - layoutW(i)) / 2f;
+            y += layoutH(i) + GAP;
         }
-        totalH = y - GAP;
+        totalH = Math.max(1, y - GAP);
     }
 
-    private float ox() { return pageIndex < pageLeft.length ? pageLeft[pageIndex] : 0; }
+    private float ox() { return viewInfinite || pageIndex >= pageLeft.length ? 0 : pageLeft[pageIndex]; }
 
-    private float oy() { return pageIndex < pageTop.length ? pageTop[pageIndex] : 0; }
+    private float oy() { return viewInfinite || pageIndex >= pageTop.length ? 0 : pageTop[pageIndex]; }
+
+    /** 일반 페이지 화면에서 (sx,sy) 가 무한 캔버스 카드 위면 그 페이지 번호, 아니면 -1 */
+    private int infiniteCardAt(float sx, float sy) {
+        if (viewInfinite || doc == null) return -1;
+        float gx = (sx - tx) / scale, gy = (sy - ty) / scale;
+        for (int i = 0; i < doc.pages.size(); i++) {
+            if (!doc.pages.get(i).isInfinite()) continue;
+            if (gy >= pageTop[i] && gy <= pageTop[i] + INF_CARD_H && gx >= pageLeft[i] && gx <= pageLeft[i] + maxPageW) return i;
+        }
+        return -1;
+    }
 
     private int pageAtWorldY(float gy) {
         if (isInfinite()) return 0;
         for (int i = 0; i < doc.pages.size(); i++) {
-            if (gy < pageTop[i] + doc.pages.get(i).h + GAP / 2f) return i;
+            if (gy < pageTop[i] + layoutH(i) + GAP / 2f) return i;
         }
         return doc.pages.size() - 1;
     }
 
     private void setCurrentPage(int i) {
         if (i == pageIndex) return;
+        if (!viewInfinite && doc.pages.get(i).isInfinite()) return; // 카드는 눌러서 연다
         clearSelection();
         pageIndex = i;
         activeLayer = Math.min(activeLayer, page().layers.size() - 1);
@@ -353,6 +379,7 @@ public class CanvasView extends View {
     private void updatePageFromViewport() {
         if (isInfinite() || inputKind != IN_NONE || !selection.isEmpty() || getHeight() == 0) return;
         int i = pageAtWorldY((getHeight() / 3f - ty) / scale);
+        if (doc.pages.get(i).isInfinite()) return;
         setCurrentPage(i);
     }
 
@@ -361,12 +388,31 @@ public class CanvasView extends View {
         i = Math.max(0, Math.min(i, doc.pages.size() - 1));
         clearSelection();
         scroller.forceFinished(true);
+        if (viewInfinite && pageIndex < doc.pages.size()) infView.put(page(), new float[]{scale, tx, ty});
         pageIndex = i;
         activeLayer = Math.min(activeLayer, page().layers.size() - 1);
-        if (!isInfinite()) {
+        if (page().isInfinite()) {
+            viewInfinite = true;
+            float[] v = infView.get(page());
+            if (v != null) {
+                scale = v[0];
+                tx = v[1];
+                ty = v[2];
+            } else {
+                scale = 1;
+                tx = 40 * density;
+                ty = 40 * density;
+            }
+        } else {
+            if (viewInfinite) {
+                viewInfinite = false;
+                scale = baseScale();
+                tx = (getWidth() - maxPageW * scale) / 2f;
+            }
             ty = 16 * density - pageTop[i] * scale;
             clampTransform();
         }
+        if (listener != null) listener.onZoomChanged(scale);
         invalidateScene();
         if (listener != null) listener.onPageChanged();
     }
@@ -374,6 +420,10 @@ public class CanvasView extends View {
     public void invalidateScene() {
         for (Bitmap b : pageCache.values()) b.recycle();
         pageCache.clear();
+        if (viewInfinite) {
+            Bitmap t = infThumbs.remove(page());
+            if (t != null) t.recycle();
+        }
         sceneDirty = true;
         invalidate();
     }
@@ -390,11 +440,9 @@ public class CanvasView extends View {
     public void fitPage() {
         if (doc == null || getWidth() == 0) return;
         if (isInfinite()) {
-            if (tx == 0 && ty == 0) {
-                scale = 1;
-                tx = 40 * density;
-                ty = 40 * density;
-            }
+            scale = 1;
+            tx = 40 * density;
+            ty = 40 * density;
         } else {
             scale = baseScale();
             tx = (getWidth() - maxPageW * scale) / 2f;
@@ -928,7 +976,7 @@ public class CanvasView extends View {
             c.translate(tx, ty);
             c.scale(scale, scale);
             RectF vis = new RectF(-tx / scale, -ty / scale, (W - tx) / scale, (H - ty) / scale);
-            Renderer.drawPage(c, doc.pages.get(0), paperColor, rc, vis, scale, excluded);
+            Renderer.drawPage(c, page(), paperColor, rc, vis, scale, excluded);
             c.restore();
         } else {
             float gTop = -ty / scale, gBot = (H - ty) / scale;
@@ -937,7 +985,11 @@ public class CanvasView extends View {
             for (int i = 0; i < doc.pages.size(); i++) {
                 Page p = doc.pages.get(i);
                 float top = pageTop[i], left = pageLeft[i];
-                if (top > gBot || top + p.h < gTop) continue;
+                if (top > gBot || top + layoutH(i) < gTop) continue;
+                if (p.isInfinite()) {
+                    drawInfiniteCard(c, i);
+                    continue;
+                }
                 float sl = tx + left * scale, st = ty + top * scale;
                 c.drawRect(sl + sh, st + sh, sl + p.w * scale + sh, st + p.h * scale + sh, shadowPaint);
                 c.save();
@@ -977,7 +1029,11 @@ public class CanvasView extends View {
         for (int i = 0; i < doc.pages.size(); i++) {
             Page p = doc.pages.get(i);
             float top = pageTop[i], left = pageLeft[i];
-            if (top > gBot || top + p.h < gTop) continue;
+            if (top > gBot || top + layoutH(i) < gTop) continue;
+            if (p.isInfinite()) {
+                drawInfiniteCard(canvas, i);
+                continue;
+            }
             Bitmap b = pageCache.get(p);
             if (b == null || b.isRecycled()) {
                 float cs = Math.min(1.6f, 1500f / Math.max(1f, p.w));
@@ -996,6 +1052,50 @@ public class CanvasView extends View {
             canvas.drawRect(sl + sh, st + sh, sl + p.w * scale + sh, st + p.h * scale + sh, shadowPaint);
             canvas.drawBitmap(b, null, new RectF(sl, st, sl + p.w * scale, st + p.h * scale), bitmapPaint);
         }
+    }
+
+    /** 일반 페이지 사이의 무한 캔버스 카드 (미리보기 + 안내) — 화면 좌표로 그림 */
+    private void drawInfiniteCard(Canvas c, int i) {
+        Page p = doc.pages.get(i);
+        float l = tx + pageLeft[i] * scale, t = ty + pageTop[i] * scale;
+        float w = maxPageW * scale, h = INF_CARD_H * scale;
+        RectF r = new RectF(l, t, l + w, t + h);
+        float rad = 14 * density;
+        cardPaint.setStyle(Paint.Style.FILL);
+        cardPaint.setColor(0x1F000000);
+        c.drawRoundRect(r.left + 3 * density, r.top + 3 * density, r.right + 3 * density, r.bottom + 3 * density, rad, rad, cardPaint);
+        cardPaint.setColor(paperColor);
+        c.drawRoundRect(r, rad, rad, cardPaint);
+        Bitmap th = infThumbs.get(p);
+        if (th == null || th.isRecycled()) {
+            th = Renderer.thumbnail(p, paperColor, rc, 900, Math.round(900 * INF_CARD_H / maxPageW));
+            infThumbs.put(p, th);
+        }
+        c.save();
+        android.graphics.Path clip = new android.graphics.Path();
+        clip.addRoundRect(r, rad, rad, android.graphics.Path.Direction.CW);
+        c.clipPath(clip);
+        float k = Math.min(w / th.getWidth(), h / th.getHeight());
+        float tw = th.getWidth() * k, thh = th.getHeight() * k;
+        c.drawBitmap(th, null, new RectF(r.centerX() - tw / 2, r.centerY() - thh / 2, r.centerX() + tw / 2, r.centerY() + thh / 2), bitmapPaint);
+        c.restore();
+        cardPaint.setStyle(Paint.Style.STROKE);
+        cardPaint.setStrokeWidth(2 * density);
+        cardPaint.setColor(0xFF3D5AFE);
+        cardPaint.setPathEffect(new DashPathEffect(new float[]{10 * density, 6 * density}, 0));
+        c.drawRoundRect(r, rad, rad, cardPaint);
+        cardPaint.setPathEffect(null);
+        // 안내 배지
+        cardPaint.setStyle(Paint.Style.FILL);
+        cardPaint.setTextSize(15 * density);
+        cardPaint.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        String label = "∞ 무한 캔버스 · " + (i + 1) + "페이지 — 눌러서 열기";
+        float lw = cardPaint.measureText(label);
+        RectF badge = new RectF(r.left + 14 * density, r.top + 14 * density, r.left + 30 * density + lw, r.top + 46 * density);
+        cardPaint.setColor(0xE63D5AFE);
+        c.drawRoundRect(badge, 16 * density, 16 * density, cardPaint);
+        cardPaint.setColor(0xFFFFFFFF);
+        c.drawText(label, badge.left + 8 * density, badge.centerY() + 5 * density, cardPaint);
     }
 
     private void drawScene(Canvas canvas) {
@@ -1239,6 +1339,11 @@ public class CanvasView extends View {
     }
 
     private void fingerTap(float sx, float sy) {
+        int card = infiniteCardAt(sx, sy);
+        if (card >= 0) {
+            goToPage(card);
+            return;
+        }
         if (!tapeWriteMode) {
             switchToPageAt(sx, sy);
             TapeElem tp = tapeAt(wx(sx), wy(sy));
@@ -1280,6 +1385,14 @@ public class CanvasView extends View {
 
     private void beginInput(MotionEvent e, int idx, boolean erase) {
         float sx = e.getX(idx), sy = e.getY(idx);
+        int card = infiniteCardAt(sx, sy);
+        if (card >= 0) {
+            // 일반 페이지 화면에서 무한 캔버스 카드를 누르면 그 페이지를 연다
+            inputKind = IN_NONE;
+            mode = M_IGNORE;
+            goToPage(card);
+            return;
+        }
         int t = erase ? TOOL_ERASER : tool;
         boolean onSelection = false;
         if (t == TOOL_LASSO && selBounds != null) {
@@ -1861,7 +1974,7 @@ public class CanvasView extends View {
             Element e = l.elems.get(i);
             boolean hit;
             ArrayList<StrokeElem> pieces = null;
-            if (e.locked || (eraserHlOnly && !(e instanceof StrokeElem && ((StrokeElem) e).isHighlighter()))) {
+            if (e.locked || e instanceof MemoElem || (eraserHlOnly && !(e instanceof StrokeElem && ((StrokeElem) e).isHighlighter()))) {
                 hit = false;
             } else if (e instanceof StrokeElem) {
                 if (eraserPartial) {
