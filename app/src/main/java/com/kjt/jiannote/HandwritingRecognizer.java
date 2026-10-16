@@ -6,13 +6,12 @@ import android.graphics.RectF;
 import com.google.mlkit.common.MlKitException;
 import com.google.mlkit.common.model.DownloadConditions;
 import com.google.mlkit.common.model.RemoteModelManager;
-import com.google.mlkit.vision.digitalink.DigitalInkRecognition;
-import com.google.mlkit.vision.digitalink.DigitalInkRecognitionModel;
-import com.google.mlkit.vision.digitalink.DigitalInkRecognitionModelIdentifier;
-import com.google.mlkit.vision.digitalink.DigitalInkRecognizer;
-import com.google.mlkit.vision.digitalink.DigitalInkRecognizerOptions;
-import com.google.mlkit.vision.digitalink.Ink;
-import com.google.mlkit.vision.digitalink.RecognitionResult;
+import com.google.mlkit.vision.digitalink.recognition.DigitalInkRecognition;
+import com.google.mlkit.vision.digitalink.recognition.DigitalInkRecognitionModel;
+import com.google.mlkit.vision.digitalink.recognition.DigitalInkRecognitionModelIdentifier;
+import com.google.mlkit.vision.digitalink.recognition.DigitalInkRecognizer;
+import com.google.mlkit.vision.digitalink.recognition.DigitalInkRecognizerOptions;
+import com.google.mlkit.vision.digitalink.recognition.Ink;
 
 import com.kjt.jiannote.model.StrokeElem;
 
@@ -129,7 +128,7 @@ public class HandwritingRecognizer {
                 t += 120;
             }
             recognizer.recognize(ib.build())
-                    .addOnSuccessListener((RecognitionResult r) -> {
+                    .addOnSuccessListener(r -> {
                         results[idx] = r.getCandidates().isEmpty() ? "" : r.getCandidates().get(0).getText();
                         if (--remaining[0] == 0) finish(results, lineH, cb);
                     })
