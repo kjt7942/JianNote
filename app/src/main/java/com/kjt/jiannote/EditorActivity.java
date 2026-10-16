@@ -694,6 +694,11 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
             Toast.makeText(this, "올가미로 손글씨를 선택하세요", Toast.LENGTH_SHORT).show();
             return;
         }
+        recognizeWith(strokes, near, prefs.s("hwLang", HandwritingRecognizer.KO));
+    }
+
+    private void recognizeWith(java.util.ArrayList<StrokeElem> strokes, android.graphics.RectF near, String lang) {
+        prefs.put("hwLang", lang);
         LinearLayout box = Ui.row(this);
         int pd = Ui.dp(this, 24);
         box.setPadding(pd, pd, pd, pd);
@@ -703,36 +708,18 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
         box.addView(msg);
         AlertDialog pdlg = new AlertDialog.Builder(this).setView(box).setCancelable(true).create();
         pdlg.show();
-        HandwritingRecognizer.recognize(this, strokes, new HandwritingRecognizer.Cb() {
+        HandwritingRecognizer.recognize(this, strokes, lang, new HandwritingRecognizer.Cb() {
             @Override
             public void ok(String text, float lineHeight) {
                 pdlg.dismiss();
-                // 결과 확인·수정 후 넣기
-                android.widget.EditText e = new android.widget.EditText(EditorActivity.this);
-                e.setText(text);
-                e.setSelection(text.length());
-                LinearLayout b = Ui.col(EditorActivity.this);
-                int p = Ui.dp(EditorActivity.this, 20);
-                b.setPadding(p, Ui.dp(EditorActivity.this, 8), p, 0);
-                b.addView(e);
-                new AlertDialog.Builder(EditorActivity.this).setTitle("인식 결과 (고칠 수 있어요)").setView(b)
-                        .setNegativeButton("취소", null)
-                        .setNeutralButton("복사", (d, w) -> {
-                            android.content.ClipboardManager cm = (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-                            cm.setPrimaryClip(android.content.ClipData.newPlainText("JianNote", e.getText().toString()));
-                            Toast.makeText(EditorActivity.this, "복사했습니다", Toast.LENGTH_SHORT).show();
-                        })
-                        .setPositiveButton("텍스트 넣기", (d, w) -> {
-                            String t = e.getText().toString().trim();
-                            if (t.isEmpty()) return;
-                            float size = Math.max(20f, Math.min(120f, lineHeight * 0.7f));
-                            canvas.addTextBeside(near, t, size);
-                        }).show();
+                showRecognized(strokes, near, lang, text, lineHeight);
             }
 
             @Override
             public void fail(String m) {
                 pdlg.dismiss();
+                // 실패해도 다른 언어로 다시 시도할 수 있게 결과 창을 띄움
+                showRecognized(strokes, near, lang, "", 40);
                 Toast.makeText(EditorActivity.this, m, Toast.LENGTH_LONG).show();
             }
 
@@ -741,6 +728,51 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
                 msg.setText(m);
             }
         });
+    }
+
+    private void showRecognized(java.util.ArrayList<StrokeElem> strokes, android.graphics.RectF near, String lang, String text, float lineHeight) {
+        LinearLayout b = Ui.col(this);
+        int p = Ui.dp(this, 20);
+        b.setPadding(p, Ui.dp(this, 8), p, 0);
+        b.addView(Ui.label(this, "인식 언어 (누르면 다시 인식)", 12, Ui.SUBTEXT, true));
+        LinearLayout langs = Ui.row(this);
+        langs.setPadding(0, Ui.dp(this, 4), 0, Ui.dp(this, 8));
+        b.addView(langs);
+        android.widget.EditText e = new android.widget.EditText(this);
+        e.setText(text);
+        e.setSelection(text.length());
+        b.addView(e);
+        if (HandwritingRecognizer.MATH.equals(lang)) {
+            b.addView(Ui.label(this, "숫자·기호 모드: 숫자와 + − × ÷ = ( ) 같은 기호를 한 줄로 인식해요. 분수·지수 같은 2단 수식은 지원되지 않아요.", 11, Ui.SUBTEXT, false));
+        }
+        AlertDialog[] dlg = new AlertDialog[1];
+        for (int i = 0; i < HandwritingRecognizer.LANGS.length; i++) {
+            String lg = HandwritingRecognizer.LANGS[i];
+            TextView chip = Ui.pill(this, HandwritingRecognizer.LANG_NAMES[i], lg.equals(lang));
+            chip.setTextSize(13);
+            chip.setPadding(Ui.dp(this, 12), Ui.dp(this, 6), Ui.dp(this, 12), Ui.dp(this, 6));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.setMargins(0, 0, Ui.dp(this, 6), 0);
+            chip.setOnClickListener(v -> {
+                if (lg.equals(lang)) return;
+                dlg[0].dismiss();
+                recognizeWith(strokes, near, lg);
+            });
+            langs.addView(chip, lp);
+        }
+        dlg[0] = new AlertDialog.Builder(this).setTitle("인식 결과 (고칠 수 있어요)").setView(b)
+                .setNegativeButton("취소", null)
+                .setNeutralButton("복사", (d, w) -> {
+                    android.content.ClipboardManager cm = (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText("JianNote", e.getText().toString()));
+                    Toast.makeText(this, "복사했습니다", Toast.LENGTH_SHORT).show();
+                })
+                .setPositiveButton("텍스트 넣기", (d, w) -> {
+                    String t = e.getText().toString().trim();
+                    if (t.isEmpty()) return;
+                    float size = Math.max(20f, Math.min(120f, lineHeight * 0.7f));
+                    canvas.addTextBeside(near, t, size);
+                }).show();
     }
 
     private void editSelectedText() {
