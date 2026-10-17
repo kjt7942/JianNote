@@ -20,7 +20,10 @@ public class Renderer {
             Paper.drawInfinite(c, p.template, paperColor, vis, scale);
         } else if (p.bgImage != null) {
             Paper.drawPage(c, Paper.BLANK, 0xFFFFFFFF, p.w, p.h, vis, scale);
-            android.graphics.Bitmap bg = rc == null ? null : rc.image(p.bgImage);
+            // 원본 PDF 를 화면(또는 내보내기) 배율로 다시 그린 조각 — 저해상도 배경 위에 덮어 그림
+            PdfBackground.Patch sharp = rc == null ? null : rc.pdfPatch(p);
+            boolean full = sharp != null && sharp.rect.left <= 0 && sharp.rect.top <= 0 && sharp.rect.right >= p.w && sharp.rect.bottom >= p.h;
+            android.graphics.Bitmap bg = rc == null || full ? null : rc.image(p.bgImage);
             if (bg != null) {
                 // 비율을 유지한 채 페이지를 꽉 채우도록 가운데 맞춰 자르기
                 float sc = Math.max(p.w / bg.getWidth(), p.h / bg.getHeight());
@@ -29,6 +32,7 @@ public class Renderer {
                         Math.round((bg.getWidth() + sw) / 2), Math.round((bg.getHeight() + sh) / 2));
                 c.drawBitmap(bg, src, new RectF(0, 0, p.w, p.h), BG_PAINT);
             }
+            if (sharp != null) c.drawBitmap(sharp.bmp, null, sharp.rect, BG_PAINT);
             c.save();
         } else {
             Paper.drawPage(c, p.template, paperColor, p.w, p.h, vis, scale);

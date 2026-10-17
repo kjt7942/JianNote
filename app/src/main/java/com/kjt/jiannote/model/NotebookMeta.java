@@ -21,6 +21,8 @@ public class NotebookMeta {
     public String category = "";
     /** 표지에 사용자 이미지(cover.jpg) 사용 */
     public boolean coverImage;
+    /** 가져온 PDF 의 원래 파일 (이름 + 크기) — 다른 앱에서 같은 PDF 를 다시 열면 이 노트를 연다 */
+    public String pdfSource = "";
 
     public JSONObject toJson() throws JSONException {
         JSONObject o = new JSONObject();
@@ -39,6 +41,7 @@ public class NotebookMeta {
         o.put("sizeH", (double) sizeHmm);
         o.put("category", category);
         o.put("coverImage", coverImage);
+        o.put("pdfSource", pdfSource);
         return o;
     }
 
@@ -59,6 +62,7 @@ public class NotebookMeta {
         m.sizeHmm = (float) o.optDouble("sizeH", 297);
         m.category = o.optString("category", "");
         m.coverImage = o.optBoolean("coverImage", false);
+        m.pdfSource = o.optString("pdfSource", "");
         return m;
     }
 

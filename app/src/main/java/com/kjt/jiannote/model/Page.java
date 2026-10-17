@@ -9,6 +9,9 @@ public class Page {
     public boolean bookmarked;
     /** PDF 가져오기 등 배경 이미지 파일명 (images/ 폴더), 없으면 null */
     public String bgImage;
+    /** 배경의 원본 PDF 파일명 (images/ 폴더)과 페이지 번호(0부터). 있으면 확대할 때 원본에서 선명하게 다시 그림 */
+    public String bgPdf;
+    public int bgPdfPage;
     public ArrayList<Layer> layers = new ArrayList<>();
 
     public Page(float w, float h, int template) {
@@ -28,10 +31,17 @@ public class Page {
         return bgImage != null && bgImage.startsWith("tpl_");
     }
 
+    /** 사진·PDF 배경 설정 (pdf 가 null 이면 원본 PDF 없음), image 가 null 이면 배경 지우기 */
+    public void setBackground(String image, String pdf, int pdfPage) {
+        bgImage = image;
+        bgPdf = image == null ? null : pdf;
+        bgPdfPage = bgPdf == null ? 0 : pdfPage;
+    }
+
     /** 같은 크기·속지(사진/PDF 속지 포함)의 빈 페이지 */
     public Page blankLike() {
         Page p = create(w, h, template);
-        if (hasImageTemplate()) p.bgImage = bgImage;
+        if (hasImageTemplate()) p.setBackground(bgImage, bgPdf, bgPdfPage);
         return p;
     }
 
@@ -42,7 +52,7 @@ public class Page {
     public Page copy() {
         Page p = new Page(w, h, template);
         p.bookmarked = bookmarked;
-        p.bgImage = bgImage;
+        p.setBackground(bgImage, bgPdf, bgPdfPage);
         for (Layer l : layers) p.layers.add(l.copy());
         return p;
     }

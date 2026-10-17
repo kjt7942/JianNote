@@ -27,6 +27,7 @@ import com.kjt.jiannote.model.Page;
 import com.kjt.jiannote.model.StrokeElem;
 import com.kjt.jiannote.model.TextElem;
 import com.kjt.jiannote.render.RenderContext;
+import com.kjt.jiannote.render.PdfBackground;
 import com.kjt.jiannote.render.Renderer;
 
 import java.util.ArrayList;
@@ -263,6 +264,8 @@ public class CanvasView extends View {
     public void setDocument(Document d, RenderContext rc, int paperColor) {
         this.doc = d;
         this.rc = rc;
+        if (pdfBg != null) pdfBg.close();
+        pdfBg = new PdfBackground(rc);
         this.paperColor = paperColor;
         undo.clear();
         pageIndex = 0;
@@ -1015,10 +1018,57 @@ public class CanvasView extends View {
         if (moving && !isInfinite() && sceneDirty && (pinching || lastRenderMs > 12)) {
             drawFromPageCache(canvas);
         } else {
-            if (sceneDirty) renderScene();
+            if (sceneDirty) {
+                renderScene();
+                if (!moving) scheduleSharpPdf();
+            }
             drawScene(canvas);
         }
         drawOverlays(canvas);
+    }
+
+    // ================= 원본 PDF 선명하게 =================
+
+    private PdfBackground pdfBg;
+    private final Runnable sharpPdfTick = this::requestSharpPdf;
+
+    /** 화면이 멈추면 잠시 뒤 보이는 PDF 페이지를 화면 배율로 다시 그리도록 요청 */
+    private void scheduleSharpPdf() {
+        handler.removeCallbacks(sharpPdfTick);
+        handler.postDelayed(sharpPdfTick, 120);
+    }
+
+    private void requestSharpPdf() {
+        if (pdfBg == null || doc == null || isInfinite() || getWidth() <= 0) return;
+        if (gestureActive || !scroller.isFinished()) return;
+        float gTop = -ty / scale, gBot = (getHeight() - ty) / scale;
+        float gLeft = -tx / scale, gRight = (getWidth() - tx) / scale;
+        java.util.ArrayList<Page> pages = new java.util.ArrayList<>();
+        java.util.ArrayList<RectF> vis = new java.util.ArrayList<>();
+        java.util.ArrayList<float[]> origin = new java.util.ArrayList<>();
+        for (int i = 0; i < doc.pages.size(); i++) {
+            Page p = doc.pages.get(i);
+            float top = pageTop[i], left = pageLeft[i];
+            if (top > gBot || top + layoutH(i) < gTop) continue;
+            if (p.isInfinite() || p.bgPdf == null) continue;
+            pages.add(p);
+            vis.add(new RectF(gLeft - left, gTop - top, gRight - left, gBot - top));
+            origin.add(new float[]{tx + left * scale, ty + top * scale});
+        }
+        // 화면 크기의 약 2배까지만 (보이는 영역 + 주변 여유)
+        long budget = (long) getWidth() * getHeight() * 2;
+        pdfBg.request(pages, vis, origin, scale, budget, () -> {
+            sceneDirty = true;
+            invalidate();
+        });
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        super.onDetachedFromWindow();
+        handler.removeCallbacks(sharpPdfTick);
+        if (pdfBg != null) pdfBg.close();
+        pdfBg = null;
     }
 
     /** 각 페이지를 낮은 해상도로 캐시해 두었다가 스크롤·확대 중에는 그대로 늘려 그린다 */

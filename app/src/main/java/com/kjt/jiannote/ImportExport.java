@@ -65,7 +65,7 @@ public class ImportExport {
 
     public static void importPdf(Activity a, Store store, Uri uri, String title, NotebookMeta base, Progress progress, Done<NotebookMeta> done) {
         run(() -> {
-            File tmp = new File(a.getCacheDir(), "import.pdf");
+            File tmp = new File(a.getCacheDir(), "import_" + UUID.randomUUID() + ".pdf");
             NotebookMeta meta = null;
             try {
                 copy(a.getContentResolver().openInputStream(uri), new FileOutputStream(tmp));
@@ -79,25 +79,14 @@ public class ImportExport {
                     RenderContext rc = new RenderContext(store.dir(meta.id));
                     File imgDir = rc.imagesDir();
                     Document doc = new Document();
+                    // 원본 PDF 를 노트 안에 보관 → 확대할 때 원본에서 선명하게 다시 그림
+                    String src = newPdfName();
+                    File srcFile = new File(imgDir, src);
+                    if (!tmp.renameTo(srcFile)) copy(new FileInputStream(tmp), new FileOutputStream(srcFile));
                     for (int i = 0; i < n; i++) {
-                        try (PdfRenderer.Page pg = pdf.openPage(i)) {
-                            float pw = pg.getWidth(), ph = pg.getHeight();
-                            float w = pw >= ph ? 1754 : 1240;
-                            float h = w * ph / Math.max(1f, pw);
-                            int bw = Math.round(w * 1.25f), bh = Math.round(h * 1.25f);
-                            Bitmap bmp = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888);
-                            bmp.eraseColor(Color.WHITE);
-                            pg.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
-                            String name = "pdf_" + i + "_" + UUID.randomUUID().toString().substring(0, 6) + ".jpg";
-                            try (OutputStream os = new FileOutputStream(new File(imgDir, name))) {
-                                bmp.compress(Bitmap.CompressFormat.JPEG, 90, os);
-                            }
-                            bmp.recycle();
-                            Page p = Page.create(w, h, Paper.BLANK);
-                            p.bgImage = name;
-                            doc.pages.add(p);
-                            if (i == 0) meta.landscape = w > h;
-                        }
+                        Page p = pdfPage(pdf, i, src, imgDir);
+                        doc.pages.add(p);
+                        if (i == 0) meta.landscape = p.w > p.h;
                         final int d = i + 1;
                         MAIN.post(() -> progress.on(d, n));
                     }
@@ -167,11 +156,30 @@ public class ImportExport {
         return m;
     }
 
-    /** PDF 한 페이지를 그 크기 그대로의 새 페이지로 (배경 이미지) */
-    public static Page pdfPageAsPage(android.content.Context c, Uri uri, int index, File imgDir) throws IOException {
-        try (ParcelFileDescriptor fd = c.getContentResolver().openFileDescriptor(uri, "r");
-             PdfRenderer pdf = new PdfRenderer(fd);
-             PdfRenderer.Page pg = pdf.openPage(index)) {
+    /** 원본 PDF 를 보관할 파일 이름 (images/src_*.pdf) */
+    private static String newPdfName() {
+        return "src_" + UUID.randomUUID().toString().substring(0, 8) + ".pdf";
+    }
+
+    /** PDF 원본을 노트의 images 폴더에 복사하고 파일 이름을 돌려준다 */
+    public static String copyPdf(android.content.Context c, Uri uri, File imgDir) throws IOException {
+        String name = newPdfName();
+        File f = new File(imgDir, name);
+        try {
+            copy(c.getContentResolver().openInputStream(uri), new FileOutputStream(f));
+        } catch (IOException e) {
+            f.delete();
+            throw e;
+        }
+        return name;
+    }
+
+    /**
+     * PDF 한 페이지를 그 크기 그대로의 새 페이지로. 배경 = 미리보기용 이미지(스크롤 중·썸네일)
+     * + 원본 PDF(src) 연결 — 화면이 멈추면 원본에서 화면 배율로 다시 그린다.
+     */
+    private static Page pdfPage(PdfRenderer pdf, int index, String src, File imgDir) throws IOException {
+        try (PdfRenderer.Page pg = pdf.openPage(index)) {
             float pw = pg.getWidth(), ph = pg.getHeight();
             float w = pw >= ph ? 1754 : 1240;
             float h = w * ph / Math.max(1f, pw);
@@ -184,10 +192,28 @@ public class ImportExport {
             }
             bmp.recycle();
             Page p = Page.create(w, h, Paper.BLANK);
-            p.bgImage = name;
+            p.setBackground(name, src, index);
             return p;
+        }
+    }
+
+    /** PDF 의 모든 페이지(최대 MAX_PDF_PAGES)를 새 페이지로 — 원본은 한 번만 복사해 함께 보관 */
+    public static List<Page> pdfToPages(android.content.Context c, Uri uri, File imgDir) throws IOException {
+        String src = copyPdf(c, uri, imgDir);
+        File f = new File(imgDir, src);
+        try (ParcelFileDescriptor fd = ParcelFileDescriptor.open(f, ParcelFileDescriptor.MODE_READ_ONLY);
+             PdfRenderer pdf = new PdfRenderer(fd)) {
+            int n = Math.min(pdf.getPageCount(), MAX_PDF_PAGES);
+            if (n == 0) throw new IOException("페이지가 없는 PDF입니다");
+            ArrayList<Page> out = new ArrayList<>();
+            for (int i = 0; i < n; i++) out.add(pdfPage(pdf, i, src, imgDir));
+            return out;
         } catch (SecurityException e) {
+            f.delete();
             throw new IOException("암호가 걸린 PDF는 사용할 수 없습니다");
+        } catch (IOException | RuntimeException e) {
+            f.delete();
+            throw e;
         }
     }
 
@@ -221,9 +247,11 @@ public class ImportExport {
         }
     }
 
-    /** PDF 의 한 페이지(0부터)를 속지 이미지로 */
-    public static String templateFromPdf(android.content.Context c, Uri uri, int page, File imgDir) throws IOException {
-        try (ParcelFileDescriptor fd = c.getContentResolver().openFileDescriptor(uri, "r");
+    /** PDF 의 한 페이지(0부터)를 속지 이미지로. 돌려주는 값 = {속지 이미지, 원본 PDF} 파일 이름 */
+    public static String[] templateFromPdf(android.content.Context c, Uri uri, int page, File imgDir) throws IOException {
+        String src = copyPdf(c, uri, imgDir);
+        File f = new File(imgDir, src);
+        try (ParcelFileDescriptor fd = ParcelFileDescriptor.open(f, ParcelFileDescriptor.MODE_READ_ONLY);
              PdfRenderer pdf = new PdfRenderer(fd)) {
             page = Math.max(0, Math.min(page, pdf.getPageCount() - 1));
             try (PdfRenderer.Page pg = pdf.openPage(page)) {
@@ -231,10 +259,14 @@ public class ImportExport {
                 Bitmap bmp = Bitmap.createBitmap(Math.round(pg.getWidth() * k), Math.round(pg.getHeight() * k), Bitmap.Config.ARGB_8888);
                 bmp.eraseColor(Color.WHITE);
                 pg.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
-                return saveTemplate(bmp, imgDir);
+                return new String[]{saveTemplate(bmp, imgDir), src};
             }
         } catch (SecurityException e) {
+            f.delete();
             throw new IOException("암호가 걸린 PDF는 사용할 수 없습니다");
+        } catch (IOException | RuntimeException e) {
+            f.delete();
+            throw e;
         }
     }
 

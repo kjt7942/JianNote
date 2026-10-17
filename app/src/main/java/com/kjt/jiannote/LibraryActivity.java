@@ -224,6 +224,86 @@ public class LibraryActivity extends Activity {
         }
         prefs.put("seenVersion", String.valueOf(ver));
         root.postDelayed(() -> Updater.autoCheck(this), 1500);
+
+        // 다른 앱(파일 관리자·메신저 등)에서 'JianNote로 열기'로 PDF 를 넘겨받은 경우
+        if (b == null) root.post(() -> openExternalPdf(getIntent()));
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        openExternalPdf(intent);
+    }
+
+    /** 다른 앱에서 넘겨받은 PDF: 전에 가져온 같은 파일이면 그 노트를, 아니면 새 노트로 가져와 연다 */
+    @SuppressWarnings("deprecation")
+    private void openExternalPdf(Intent in) {
+        if (in == null) return;
+        Uri uri = null;
+        if (Intent.ACTION_VIEW.equals(in.getAction())) uri = in.getData();
+        else if (Intent.ACTION_SEND.equals(in.getAction())) uri = in.getParcelableExtra(Intent.EXTRA_STREAM);
+        if (uri == null) return;
+        in.setAction(null);
+        refresh();
+        String key = pdfSourceKey(uri);
+        NotebookMeta found = null;
+        if (!key.isEmpty()) {
+            for (NotebookMeta m : all) {
+                if (key.equals(m.pdfSource) && (found == null || m.modified > found.modified)) found = m;
+            }
+        }
+        if (found == null) {
+            if (checkLimit()) importPdfUri(uri, null, key);
+            return;
+        }
+        final NotebookMeta note = found;
+        final Uri src = uri;
+        new AlertDialog.Builder(this).setTitle("이미 가져온 PDF예요")
+                .setMessage("'" + note.title + "' 노트로 가져온 적이 있어요. 그 노트를 열까요?\n(새로 가져오면 필기 없는 새 노트가 만들어져요)")
+                .setNegativeButton("새로 가져오기", (d, w) -> {
+                    if (checkLimit()) importPdfUri(src, null, key);
+                })
+                .setPositiveButton("노트 열기", (d, w) -> open(note))
+                .show();
+    }
+
+    /** 같은 PDF 인지 알아보기 위한 키 (파일 이름 + 크기), 알 수 없으면 "" */
+    private String pdfSourceKey(Uri uri) {
+        try (android.database.Cursor c = getContentResolver().query(uri, new String[]{OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE}, null, null, null)) {
+            if (c != null && c.moveToFirst() && !c.isNull(0) && !c.isNull(1) && c.getLong(1) > 0) {
+                return c.getString(0) + ":" + c.getLong(1);
+            }
+        } catch (Exception ignored) {
+        }
+        return "";
+    }
+
+    /** PDF 를 새 노트로 가져와 연다 */
+    private void importPdfUri(Uri uri, NotebookMeta base, String sourceKey) {
+        AlertDialog pd = progress("PDF를 가져오는 중…");
+        TextView msg = pd.getWindow().getDecorView().findViewWithTag("msg");
+        ImportExport.importPdf(this, store, uri, displayName(uri), base,
+                (d, n) -> {
+                    if (msg != null) msg.setText("PDF를 가져오는 중… " + d + " / " + n + "페이지");
+                },
+                new ImportExport.Done<NotebookMeta>() {
+                    @Override
+                    public void ok(NotebookMeta m) {
+                        pd.dismiss();
+                        if (!category.startsWith("__")) m.category = category;
+                        m.pdfSource = sourceKey;
+                        save(m);
+                        open(m);
+                    }
+
+                    @Override
+                    public void fail(String m) {
+                        pd.dismiss();
+                        refresh();
+                        Toast.makeText(LibraryActivity.this, "PDF 가져오기 실패: " + m, Toast.LENGTH_LONG).show();
+                    }
+                });
     }
 
     @Override
@@ -651,32 +731,7 @@ public class LibraryActivity extends Activity {
             return;
         }
         if (req == REQ_PDF) {
-            AlertDialog pd = progress("PDF를 가져오는 중…");
-            TextView msg = pd.getWindow().getDecorView().findViewWithTag("msg");
-            NotebookMeta base = takePending(displayName(uri));
-            ImportExport.importPdf(this, store, uri, displayName(uri), base,
-                    (d, n) -> {
-                        if (msg != null) msg.setText("PDF를 가져오는 중… " + d + " / " + n + "페이지");
-                    },
-                    new ImportExport.Done<NotebookMeta>() {
-                        @Override
-                        public void ok(NotebookMeta m) {
-                            pd.dismiss();
-                            if (!category.startsWith("__")) {
-                                m.category = category;
-                                save(m);
-                            }
-                            refresh();
-                            open(m);
-                        }
-
-                        @Override
-                        public void fail(String m) {
-                            pd.dismiss();
-                            refresh();
-                            Toast.makeText(LibraryActivity.this, "PDF 가져오기 실패: " + m, Toast.LENGTH_LONG).show();
-                        }
-                    });
+            importPdfUri(uri, takePending(displayName(uri)), pdfSourceKey(uri));
         } else if (req == REQ_BACKUP) {
             int room = Integer.MAX_VALUE;
             AlertDialog pd = progress("백업을 복원하는 중…");

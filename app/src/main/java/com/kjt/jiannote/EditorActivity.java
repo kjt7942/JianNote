@@ -907,7 +907,7 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
                         default:
                             askScope("사진·PDF 속지 지우기", all -> {
                                 for (Page p : all ? doc.pages : java.util.Collections.singletonList(canvas.page())) {
-                                    p.bgImage = null;
+                                    p.setBackground(null, null, 0);
                                 }
                                 templateChanged();
                             });
@@ -969,8 +969,13 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
     private boolean confirmedBgReplace;
 
     private void applyImageTemplate(String file) {
+        applyImageTemplate(new String[]{file, null}, 0);
+    }
+
+    /** tpl = {속지 이미지, 원본 PDF(없으면 null)}, pdfPage = 원본 PDF 의 페이지 */
+    private void applyImageTemplate(String[] tpl, int pdfPage) {
         askScope("속지를 적용할 페이지", all -> {
-            for (Page p : all ? doc.pages : java.util.Collections.singletonList(canvas.page())) p.bgImage = file;
+            for (Page p : all ? doc.pages : java.util.Collections.singletonList(canvas.page())) p.setBackground(tpl[0], tpl[1], pdfPage);
             templateChanged();
             Toast.makeText(this, "속지를 바꿨습니다. 새로 추가하는 페이지에도 같은 속지가 들어가요", Toast.LENGTH_LONG).show();
         });
@@ -1001,11 +1006,11 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
                     if (all) {
                         for (Page p : doc.pages) {
                             p.template = t;
-                            p.bgImage = null;
+                            p.setBackground(null, null, 0);
                         }
                     } else {
                         cur.template = t;
-                        cur.bgImage = null;
+                        cur.setBackground(null, null, 0);
                     }
                     meta.template = t;
                     dirty = true;
@@ -1051,16 +1056,37 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
 
     private void exportPdf() {
         save();
-        try {
-            Uri u = Exporter.exportPdf(this, meta, doc, rc, false);
-            new AlertDialog.Builder(this).setTitle("PDF 저장 완료")
-                    .setMessage("다운로드/JianNote 폴더에 저장했습니다.")
-                    .setNegativeButton("확인", null)
-                    .setPositiveButton("공유", (d, w) -> Exporter.share(this, u, "application/pdf"))
-                    .show();
-        } catch (Exception e) {
-            Toast.makeText(this, "PDF 저장 실패: " + e.getMessage(), Toast.LENGTH_LONG).show();
-        }
+        // 원본 PDF 배경을 고해상도로 다시 그리느라 오래 걸릴 수 있어 진행 상황 표시
+        LinearLayout box = Ui.row(this);
+        int pad = Ui.dp(this, 24);
+        box.setPadding(pad, pad, pad, pad);
+        box.addView(new android.widget.ProgressBar(this));
+        TextView msg = Ui.label(this, "PDF로 내보내는 중…", 15, Ui.TEXT, false);
+        msg.setPadding(Ui.dp(this, 16), 0, 0, 0);
+        box.addView(msg);
+        AlertDialog pd = new AlertDialog.Builder(this).setView(box).setCancelable(false).create();
+        pd.show();
+        Exporter.exportPdf(this, meta, doc, rc, false,
+                (d, n) -> msg.setText("PDF로 내보내는 중… " + d + " / " + n + "페이지"),
+                new ImportExport.Done<Uri>() {
+                    @Override
+                    public void ok(Uri u) {
+                        if (isDestroyed()) return;
+                        pd.dismiss();
+                        new AlertDialog.Builder(EditorActivity.this).setTitle("PDF 저장 완료")
+                                .setMessage("다운로드/JianNote 폴더에 저장했습니다.")
+                                .setNegativeButton("확인", null)
+                                .setPositiveButton("공유", (d, w) -> Exporter.share(EditorActivity.this, u, "application/pdf"))
+                                .show();
+                    }
+
+                    @Override
+                    public void fail(String m) {
+                        if (isDestroyed()) return;
+                        pd.dismiss();
+                        Toast.makeText(EditorActivity.this, "PDF 저장 실패: " + m, Toast.LENGTH_LONG).show();
+                    }
+                });
     }
 
     private void exportPng() {
@@ -1570,11 +1596,9 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
             Uri uri = data.getData();
             int at = canvas.pageIndex() + 1;
             try {
-                int n = Math.min(ImportExport.pdfPageCount(this, uri), ImportExport.MAX_PDF_PAGES);
-                for (int i = 0; i < n; i++) {
-                    Page pg = ImportExport.pdfPageAsPage(this, uri, i, rc.imagesDir());
-                    canvas.addPage(pg, at + i);
-                }
+                java.util.List<Page> pages = ImportExport.pdfToPages(this, uri, rc.imagesDir());
+                int n = pages.size();
+                for (int i = 0; i < n; i++) canvas.addPage(pages.get(i), at + i);
                 canvas.goToPage(at);
                 Toast.makeText(this, "PDF " + n + "페이지를 추가했습니다", Toast.LENGTH_SHORT).show();
                 if (pagePanel.isOpen()) pagePanel.rebuild();
@@ -1596,14 +1620,14 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
             try {
                 int n = ImportExport.pdfPageCount(this, uri);
                 if (n <= 1) {
-                    applyImageTemplate(ImportExport.templateFromPdf(this, uri, 0, rc.imagesDir()));
+                    applyImageTemplate(ImportExport.templateFromPdf(this, uri, 0, rc.imagesDir()), 0);
                 } else {
                     String[] pages = new String[n];
                     for (int i = 0; i < n; i++) pages[i] = (i + 1) + "페이지";
                     new AlertDialog.Builder(this).setTitle("속지로 쓸 PDF 페이지")
                             .setItems(pages, (d, w) -> {
                                 try {
-                                    applyImageTemplate(ImportExport.templateFromPdf(this, uri, w, rc.imagesDir()));
+                                    applyImageTemplate(ImportExport.templateFromPdf(this, uri, w, rc.imagesDir()), w);
                                 } catch (Exception e) {
                                     Toast.makeText(this, "속지 만들기 실패: " + e.getMessage(), Toast.LENGTH_LONG).show();
                                 }

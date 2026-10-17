@@ -13,7 +13,7 @@ import java.util.ArrayList;
 /** 노트북 하나의 전체 내용 (페이지 → 레이어 → 요소). 바이너리로 저장. */
 public class Document {
     private static final int MAGIC = 0x494E4B53; // INKS
-    private static final int VERSION = 5;
+    private static final int VERSION = 6;
 
     public ArrayList<Page> pages = new ArrayList<>();
 
@@ -29,6 +29,8 @@ public class Document {
                 o.writeInt(p.template);
                 o.writeBoolean(p.bookmarked);
                 o.writeUTF(p.bgImage == null ? "" : p.bgImage);
+                o.writeUTF(p.bgPdf == null ? "" : p.bgPdf);
+                o.writeInt(p.bgPdfPage);
                 o.writeInt(p.layers.size());
                 for (Layer l : p.layers) {
                     o.writeUTF(l.name);
@@ -105,6 +107,14 @@ public class Document {
                 if (ver >= 3) {
                     String bg = in.readUTF();
                     p.bgImage = bg.isEmpty() ? null : bg;
+                }
+                if (ver >= 6) {
+                    String pdf = in.readUTF();
+                    int pdfPage = in.readInt();
+                    if (!pdf.isEmpty() && p.bgImage != null) {
+                        p.bgPdf = pdf;
+                        p.bgPdfPage = pdfPage;
+                    }
                 }
                 int lc = in.readInt();
                 for (int j = 0; j < lc; j++) {
