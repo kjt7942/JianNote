@@ -74,7 +74,7 @@ public class ShapeRecognizer {
     /** 손으로 그린 획을 직선/사각형/원/삼각형으로 인식. 인식 실패 시 null */
     public static StrokeElem recognize(StrokeElem src) {
         int n = src.n;
-        if (n < 4) return null;
+        if (n < 3) return null;
         float[] p = src.pts;
         float l = Float.MAX_VALUE, t = Float.MAX_VALUE, r = -Float.MAX_VALUE, b = -Float.MAX_VALUE;
         float len = 0;
@@ -85,15 +85,38 @@ public class ShapeRecognizer {
         }
         float bw = r - l, bh = b - t;
         float diag = (float) Math.hypot(bw, bh);
-        if (diag < 25) return null;
+        if (diag < 6) return null; // 작은 도형도 인식
         float w = src.avgWidth();
         int color = src.color;
         float fx = p[0], fy = p[1], lx = p[3 * (n - 1)], ly = p[3 * (n - 1) + 1];
         float chord = (float) Math.hypot(lx - fx, ly - fy);
 
+        // 꺾이는 점 찾기 (Douglas-Peucker): 2점이면 직선, 3~5점이고 확실히 꺾였으면 꺾은선
+        int[] keep = new int[n];
+        int kc = 0;
+        boolean[] mark = new boolean[n];
+        mark[0] = true;
+        mark[n - 1] = true;
+        float eps = Math.max(1.5f, Math.min(len * 0.045f, 14f + len * 0.01f));
+        dp(p, 0, n - 1, eps, mark);
+        for (int i = 0; i < n; i++) if (mark[i]) keep[kc++] = i;
+
+        if (kc == 2 && chord > 0.6f * len) {
+            lastType = LINE;
+            return build(LINE, fx, fy, lx, ly, src, w);
+        }
         if (chord > 0.9f * len) {
             lastType = LINE;
             return build(LINE, fx, fy, lx, ly, src, w);
+        }
+        if (chord >= 0.3f * diag && kc >= 3 && kc <= 5 && sharpCorners(p, keep, kc)) {
+            StrokeElem s = src.blank();
+            for (int k = 1; k < kc; k++) {
+                int a = keep[k - 1], b2 = keep[k];
+                seg(s, p[3 * a], p[3 * a + 1], p[3 * b2], p[3 * b2 + 1], w, k == 1);
+            }
+            lastType = -1; // 시작점 기준으로 돌리고 늘이는 방식
+            return s;
         }
         if (chord < 0.3f * diag) {
             // 닫힌 도형: 면적 비율로 판별
@@ -104,7 +127,7 @@ public class ShapeRecognizer {
             }
             area = Math.abs(area) / 2;
             double ratio = area / Math.max(1, bw * bh);
-            if (bw < 10 || bh < 10) return null;
+            if (bw < 4 || bh < 4) return null;
             if (ratio > 0.86) {
                 lastType = RECT;
                 return build(RECT, l, t, r, b, src, w);
@@ -119,6 +142,40 @@ public class ShapeRecognizer {
             }
         }
         return null;
+    }
+
+    private static void dp(float[] p, int a, int b, float eps, boolean[] mark) {
+        if (b <= a + 1) return;
+        float best = -1;
+        int idx = -1;
+        for (int i = a + 1; i < b; i++) {
+            float d = StrokeElem.segDist(p[3 * i], p[3 * i + 1], p[3 * a], p[3 * a + 1], p[3 * b], p[3 * b + 1]);
+            if (d > best) { best = d; idx = i; }
+        }
+        if (best > eps) {
+            mark[idx] = true;
+            dp(p, a, idx, eps, mark);
+            dp(p, idx, b, eps, mark);
+        }
+    }
+
+    /** 꺾이는 점마다 55° 이상 꺾였고 각 변이 충분히 긴지 확인 (완만한 곡선은 제외) */
+    private static boolean sharpCorners(float[] p, int[] keep, int kc) {
+        float total = 0;
+        float[] sl = new float[kc - 1];
+        for (int k = 1; k < kc; k++) {
+            sl[k - 1] = (float) Math.hypot(p[3 * keep[k]] - p[3 * keep[k - 1]], p[3 * keep[k] + 1] - p[3 * keep[k - 1] + 1]);
+            total += sl[k - 1];
+        }
+        for (float v : sl) if (v < total * 0.12f) return false;
+        for (int k = 1; k < kc - 1; k++) {
+            double a1 = Math.atan2(p[3 * keep[k] + 1] - p[3 * keep[k - 1] + 1], p[3 * keep[k]] - p[3 * keep[k - 1]]);
+            double a2 = Math.atan2(p[3 * keep[k + 1] + 1] - p[3 * keep[k] + 1], p[3 * keep[k + 1]] - p[3 * keep[k]]);
+            double d = Math.abs(a2 - a1);
+            if (d > Math.PI) d = 2 * Math.PI - d;
+            if (Math.toDegrees(d) < 55) return false;
+        }
+        return true;
     }
 
     private static StrokeElem triangle(StrokeElem src, int color, float w) {

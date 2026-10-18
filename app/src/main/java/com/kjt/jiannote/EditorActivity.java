@@ -790,8 +790,8 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
         bar.setPadding(Ui.dp(this, 10), Ui.dp(this, 4), Ui.dp(this, 10), Ui.dp(this, 4));
         int[] icons = {R.drawable.ic_edit, R.drawable.ic_delete, R.drawable.ic_content_copy, R.drawable.ic_palette, R.drawable.ic_layers,
                 R.drawable.ic_lock, R.drawable.ic_link, R.drawable.ic_link_off, R.drawable.ic_grid_view,
-                R.drawable.ic_add_reaction, R.drawable.ic_close};
-        String[] labels = {"글자편집", "삭제", "복제", "색상", "레이어로", "고정", "붙이기", "떼기", "양식", "스티커로", "해제"};
+                R.drawable.ic_add_reaction, R.drawable.ic_crop_square, R.drawable.ic_close};
+        String[] labels = {"글자편집", "삭제", "복제", "색상", "레이어로", "고정", "붙이기", "떼기", "양식", "스티커로", "캡처", "해제"};
         for (int i = 0; i < icons.length; i++) {
             TextView t = Ui.iconButton(this, icons[i], labels[i]);
             Ui.tintIcon(t, 0xFFFFFFFF);
@@ -818,6 +818,7 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
                         break;
                     case 8: chooseMemoPattern(); break;
                     case 9: saveSelectionAsSticker(); break;
+                    case 10: captureSelection(); break;
                     default: canvas.clearSelection(); break;
                 }
             });
@@ -837,6 +838,22 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
             i.setType("image/*");
             startActivityForResult(i, REQ_STICKER_IMAGE);
         });
+    }
+
+    /** 올가미로 고른 영역을 그림 파일로 저장 */
+    private void captureSelection() {
+        android.graphics.RectF r = canvas.selectionBounds();
+        if (r == null) return;
+        try {
+            Uri u = Exporter.exportRegion(this, meta, canvas.page(), rc, r);
+            new AlertDialog.Builder(this).setTitle("캡처 저장 완료")
+                    .setMessage("사진/JianNote 폴더에 저장했습니다.")
+                    .setNegativeButton("확인", null)
+                    .setPositiveButton("공유", (d, w) -> Exporter.share(this, u, "image/png"))
+                    .show();
+        } catch (Exception e) {
+            Toast.makeText(this, "캡처 실패: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
     }
 
     private void saveSelectionAsSticker() {
@@ -1981,6 +1998,15 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
         ColorPicker.Palette.add(this, color);
         Toast.makeText(this, "색을 가져왔습니다 " + ColorPicker.hex(color), Toast.LENGTH_SHORT).show();
         updateStrip();
+    }
+
+    @Override
+    public void onLockedLassoed(java.util.List<com.kjt.jiannote.model.Element> list) {
+        new AlertDialog.Builder(this).setTitle("고정된 항목 " + list.size() + "개")
+                .setMessage("올가미 안에 고정된 항목만 있습니다. 한 번에 고정을 해제하고 선택할까요?")
+                .setNegativeButton("취소", null)
+                .setPositiveButton("고정 해제하고 선택", (d, w) -> canvas.unlockAndSelect(list))
+                .show();
     }
 
     @Override

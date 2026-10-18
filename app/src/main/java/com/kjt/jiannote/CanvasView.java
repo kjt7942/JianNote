@@ -68,6 +68,9 @@ public class CanvasView extends View {
 
         /** 고정된 요소를 꾹 누름 */
         void onLockedPressed(Element e);
+
+        /** 올가미 안에 고정된 항목만 있음 */
+        void onLockedLassoed(java.util.List<Element> list);
     }
 
     public static final int TOOL_PEN = 0, TOOL_HIGHLIGHTER = 1, TOOL_ERASER = 2, TOOL_LASSO = 3,
@@ -1014,7 +1017,8 @@ public class CanvasView extends View {
     @Override
     protected void onDraw(Canvas canvas) {
         if (doc == null || scene == null) return;
-        boolean moving = gestureActive || !scroller.isFinished();
+        // 손가락으로 톡 누르거나 가만히 있을 때는 흐린 캐시 대신 원래 화질로 그린다
+        boolean moving = (gestureActive && (movedFar || pinching)) || !scroller.isFinished();
         if (moving && !isInfinite() && sceneDirty && (pinching || lastRenderMs > 12)) {
             drawFromPageCache(canvas);
         } else {
@@ -1205,6 +1209,12 @@ public class CanvasView extends View {
             canvas.drawCircle(hoverX, hoverY, r, cursorPaint);
             cursorPaint.setColor(0xAA555555);
         }
+    }
+
+    /** 크기 조절 동그라미를 누른 것으로 보는 반경: 동그라미 크기 정도만, 작은 선택 영역에서는 더 작게 */
+    private float handleHitR(RectF b) {
+        float small = Math.min(b.width(), b.height());
+        return Math.min(18 * density, Math.max(11 * density, small * 0.25f));
     }
 
     private RectF screenSelBounds() {
@@ -1447,7 +1457,7 @@ public class CanvasView extends View {
         boolean onSelection = false;
         if (t == TOOL_LASSO && selBounds != null) {
             RectF b = screenSelBounds();
-            onSelection = b.contains(sx, sy) || Math.hypot(sx - b.right, sy - b.bottom) < 28 * density;
+            onSelection = b.contains(sx, sy) || Math.hypot(sx - b.right, sy - b.bottom) < handleHitR(b);
         }
         if (!onSelection) switchToPageAt(sx, sy);
         float x = wx(sx), y = wy(sy);
@@ -1503,7 +1513,7 @@ public class CanvasView extends View {
             case TOOL_LASSO: {
                 if (selBounds != null) {
                     RectF b = screenSelBounds();
-                    if (Math.hypot(sx - b.right, sy - b.bottom) < 28 * density) {
+                    if (Math.hypot(sx - b.right, sy - b.bottom) < handleHitR(b)) {
                         inputKind = IN_SCALE;
                         dragStartX = x;
                         dragStartY = y;
@@ -1805,7 +1815,7 @@ public class CanvasView extends View {
         float firstX = current.pts[0], firstY = current.pts[1];
         StrokeElem shape = ShapeRecognizer.recognize(current);
         int type = shape != null ? ShapeRecognizer.lastType : -1;
-        if (shape == null && current.n >= 8 && current.length() * scale > 60 * density) {
+        if (shape == null && current.n >= 5 && current.length() * scale > 20 * density) {
             shape = current.smoothedCurve(); // 곡선 보정
             type = -1;
         }
@@ -2103,7 +2113,32 @@ public class CanvasView extends View {
                 if (pip(e.centerX(), e.centerY(), xs, ys)) sel.add(e);
             }
         }
-        if (!sel.isEmpty()) select(sel);
+        if (!sel.isEmpty()) {
+            select(sel);
+            return;
+        }
+        // 고정되지 않은 항목이 없고 고정된 항목만 있으면 한 번에 해제할 수 있게 물어본다
+        ArrayList<Element> locked = new ArrayList<>();
+        for (Element e : activeLayer().elems) {
+            if (!e.locked) continue;
+            if (e instanceof StrokeElem) {
+                StrokeElem s = (StrokeElem) e;
+                int inside = 0;
+                for (int i = 0; i < s.n; i++) if (pip(s.pts[3 * i], s.pts[3 * i + 1], xs, ys)) inside++;
+                if (s.n > 0 && inside >= Math.max(1, s.n * 0.6f)) locked.add(e);
+            } else if (pip(e.centerX(), e.centerY(), xs, ys)) {
+                locked.add(e);
+            }
+        }
+        if (!locked.isEmpty() && listener != null) listener.onLockedLassoed(locked);
+    }
+
+    /** 고정된 항목들을 한꺼번에 풀고 선택 */
+    public void unlockAndSelect(java.util.List<Element> list) {
+        if (list.isEmpty()) return;
+        for (Element e : list) e.locked = false;
+        changed();
+        select(new ArrayList<>(list));
     }
 
     private static boolean pip(float x, float y, float[] xs, float[] ys) {

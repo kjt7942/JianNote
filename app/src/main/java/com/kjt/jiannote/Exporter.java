@@ -215,6 +215,40 @@ public class Exporter {
         return uri;
     }
 
+    /** 페이지의 일부 영역(올가미 선택 영역)을 이미지로 저장 */
+    public static Uri exportRegion(Activity a, NotebookMeta m, Page p, RenderContext rc, RectF region) throws IOException {
+        RectF area = new RectF(region);
+        area.inset(-10, -10);
+        if (!p.isInfinite()) {
+            area.left = Math.max(0, area.left);
+            area.top = Math.max(0, area.top);
+            area.right = Math.min(p.w, area.right);
+            area.bottom = Math.min(p.h, area.bottom);
+        }
+        if (area.width() < 2 || area.height() < 2) throw new IOException("캡처할 영역이 너무 작습니다");
+        float s = Math.min(3f, 4096f / Math.max(area.width(), area.height()));
+        Bitmap b = Bitmap.createBitmap(Math.max(1, (int) (area.width() * s)), Math.max(1, (int) (area.height() * s)), Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(b);
+        c.drawColor(Color.WHITE);
+        c.scale(s, s);
+        c.translate(-area.left, -area.top);
+        RenderContext erc = new RenderContext(rc);
+        try (SharpBg sharp = new SharpBg(erc)) {
+            sharp.prepare(p, s);
+            Renderer.drawPage(c, p, m.paperColor, erc, area, s, null);
+        }
+        erc.keepPdfPatches(java.util.Collections.emptyList());
+        String stamp = new java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.KOREA).format(new java.util.Date());
+        Uri uri = insert(a, MediaStore.Images.Media.EXTERNAL_CONTENT_URI, safeName(m.title) + "_캡처_" + stamp + ".png",
+                "image/png", Environment.DIRECTORY_PICTURES + "/JianNote");
+        try (OutputStream os = a.getContentResolver().openOutputStream(uri)) {
+            b.compress(Bitmap.CompressFormat.PNG, 100, os);
+        }
+        b.recycle();
+        finish(a, uri);
+        return uri;
+    }
+
     private static Uri insert(Activity a, Uri collection, String name, String mime, String relPath) throws IOException {
         ContentValues v = new ContentValues();
         v.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
