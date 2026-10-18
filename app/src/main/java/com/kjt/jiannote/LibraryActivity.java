@@ -981,7 +981,7 @@ public class LibraryActivity extends Activity {
         String[] items = {
                 "☝️  손가락으로 그리기: " + (finger ? "켜짐" : "꺼짐 (S펜 전용)"),
                 "🔄  업데이트 확인",
-                "⚙️  자동 업데이트: " + (Updater.autoEnabled(this) ? "켜짐" : "꺼짐"),
+                "⚙️  시작할 때 업데이트 확인: " + (Updater.autoEnabled(this) ? "켜짐" : "꺼짐"),
                 "💾  모든 노트 백업하기",
                 "📥  백업 파일 가져오기",
                 "📖  사용 방법",
@@ -1001,7 +1001,7 @@ public class LibraryActivity extends Activity {
                         case 2: {
                             boolean on = !Updater.autoEnabled(this);
                             Updater.setAuto(this, on);
-                            Toast.makeText(this, on ? "새 버전이 나오면 자동으로 받아 설치합니다" : "자동 업데이트를 껐습니다", Toast.LENGTH_SHORT).show();
+                            Toast.makeText(this, on ? "앱을 켤 때 새 버전이 있으면 업데이트할지 물어볼게요" : "시작할 때 업데이트 확인을 껐습니다 (설정 → 업데이트 확인으로 직접 확인)", Toast.LENGTH_SHORT).show();
                             break;
                         }
                         case 3: backupAll(); break;

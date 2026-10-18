@@ -28,7 +28,8 @@ import java.net.URL;
 
 /**
  * GitHub Releases 자동 업데이트.
- * - 앱을 켤 때(6시간에 한 번) 최신 릴리스를 확인 → 새 버전이면 APK를 받아 바로 설치 진행
+ * - 앱을 켤 때마다 최신 릴리스를 확인 → 새 버전이면 업데이트할지 물어보고, '업데이트'를 누르면 APK를 받아 설치
+ * - '이 버전 건너뛰기'를 고르면 그 버전은 다시 묻지 않음 (더 새 버전이 나오면 다시 물어봄)
  * - 버전 번호 = GitHub Actions 실행 번호 (태그 build-N, versionCode N)
  * - 구글 플레이에서 설치한 경우에는 플레이 정책상 동작하지 않음
  * - 안드로이드는 다른 앱(브라우저 등)으로 설치된 앱의 첫 자체 업데이트에 '설치' 확인을 한 번 요구하고,
@@ -36,7 +37,6 @@ import java.net.URL;
  */
 public class Updater {
     static final String API = "https://api.github.com/repos/kjt7942/JianNote/releases/latest";
-    private static final long INTERVAL = 6 * 60 * 60 * 1000L;
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static boolean busy;
 
@@ -75,10 +75,6 @@ public class Updater {
     /** 앱 시작 시 호출 (자동) */
     public static void autoCheck(Activity a) {
         if (!autoEnabled(a) || fromPlayStore(a)) return;
-        Prefs p = new Prefs(a);
-        long last = Long.parseLong(p.s("updLast", "0"));
-        if (System.currentTimeMillis() - last < INTERVAL) return;
-        p.put("updLast", String.valueOf(System.currentTimeMillis()));
         check(a, false);
     }
 
@@ -112,15 +108,52 @@ public class Updater {
                     if (manual) MAIN.post(() -> Toast.makeText(a, "최신 버전을 사용 중입니다 (" + cur + ")", Toast.LENGTH_SHORT).show());
                     return;
                 }
+                // 자동 확인일 때, 건너뛰기로 한 버전이면 묻지 않는다
+                if (!manual && latest <= Long.parseLong(new Prefs(a).s("updSkip", "0"))) return;
                 final String url = apkUrl, name = apkName;
                 final String title = rel.optString("name", "새 버전");
+                final String notes = notes(rel.optString("body", ""));
                 MAIN.post(() -> {
-                    if (!a.isFinishing()) download(a, url, name, title);
+                    if (!a.isFinishing() && !a.isDestroyed()) ask(a, url, name, title, notes, latest, manual);
                 });
             } catch (Exception e) {
                 if (manual) MAIN.post(() -> Toast.makeText(a, "업데이트 확인 실패: 인터넷 연결을 확인하세요", Toast.LENGTH_LONG).show());
             }
         }, "jiannote-update").start();
+    }
+
+    /** 릴리스 설명의 첫 문단(= 커밋 메시지 첫 줄)만 '바뀐 내용'으로 */
+    private static String notes(String body) {
+        String b = body.replace("\r", "").trim();
+        int end = b.indexOf("\n\n");
+        if (end >= 0) b = b.substring(0, end);
+        if (b.startsWith("APK =") || b.startsWith("Co-Authored-By")) return "";
+        return b.length() > 400 ? b.substring(0, 400) + "…" : b;
+    }
+
+    /** 새 버전 안내: 업데이트 / 나중에(다음에 켤 때 다시) / 이 버전 건너뛰기 */
+    private static void ask(Activity a, String url, String name, String title, String notes, long latest, boolean manual) {
+        String msg = "새 버전이 나왔습니다. 지금 업데이트할까요?\n\n현재 버전: " + versionName(a) + "\n새 버전: " + title.replace("JianNote ", "")
+                + (notes.isEmpty() ? "" : "\n\n바뀐 내용\n" + notes);
+        AlertDialog.Builder b = new AlertDialog.Builder(a).setTitle("업데이트")
+                .setMessage(msg)
+                .setPositiveButton("업데이트", (d, w) -> download(a, url, name, title))
+                .setNegativeButton("나중에", null);
+        if (!manual) {
+            b.setNeutralButton("이 버전 건너뛰기", (d, w) -> {
+                new Prefs(a).put("updSkip", String.valueOf(latest));
+                Toast.makeText(a, "이 버전은 묻지 않을게요. 설정 → 업데이트 확인으로 언제든 받을 수 있어요", Toast.LENGTH_LONG).show();
+            });
+        }
+        b.show();
+    }
+
+    private static String versionName(Context c) {
+        try {
+            return "v" + c.getPackageManager().getPackageInfo(c.getPackageName(), 0).versionName;
+        } catch (Exception e) {
+            return String.valueOf(currentVersion(c));
+        }
     }
 
     private static String get(String u) throws Exception {

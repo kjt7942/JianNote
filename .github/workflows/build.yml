@@ -53,7 +53,11 @@ jobs:
         with:
           tag_name: build-${{ github.run_number }}
           name: JianNote v1.1.${{ github.run_number }}
-          body: "APK = 태블릿에 직접 설치용 / AAB = 구글 플레이 콘솔 업로드용"
+          # 첫 문단(커밋 메시지 첫 줄)은 앱의 업데이트 안내 창에 '바뀐 내용'으로 표시됨
+          body: |
+            ${{ github.event.head_commit.message || '앱 개선' }}
+
+            APK = 태블릿에 직접 설치용 / AAB = 구글 플레이 콘솔 업로드용
           files: |
             JianNote-*.apk
             JianNote-*.aab
