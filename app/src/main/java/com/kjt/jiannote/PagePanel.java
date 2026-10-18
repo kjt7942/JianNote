@@ -53,7 +53,7 @@ public class PagePanel extends FrameLayout {
         this.canvas = canvas;
         this.rc = rc;
         this.host = host;
-        panelW = Ui.dp(a, 330);
+        panelW = Math.min(Ui.dp(a, 330), Ui.dp(a, Ui.widthDp(a) - 40));
 
         View dim = new View(a);
         dim.setBackgroundColor(0x55000000);

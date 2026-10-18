@@ -415,7 +415,7 @@ public class Stickers {
 
     private static GridLayout grid(Activity a) {
         GridLayout g = new GridLayout(a);
-        g.setColumnCount(5);
+        g.setColumnCount(Ui.fitCols(a, 84, 96, 5));
         return g;
     }
 

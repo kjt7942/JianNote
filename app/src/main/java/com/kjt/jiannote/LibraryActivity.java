@@ -60,6 +60,12 @@ public class LibraryActivity extends Activity {
     private NotebookMeta coverTarget;
     /** 새 노트 창에서 '사진/PDF로 시작'을 고른 경우의 설정 */
     private NotebookMeta pendingNew;
+    private LinearLayout headerBox, headerRow, searchRow;
+    private TextView headerTitle, headerAdd;
+    private EditText headerSearch;
+    private View headerSpacer;
+    private Boolean headerCompact;
+    private GridView noteGrid;
 
     @Override
     protected void onCreate(Bundle b) {
@@ -72,25 +78,30 @@ public class LibraryActivity extends Activity {
         LinearLayout root = Ui.col(this);
         root.setBackgroundColor(Ui.BG);
 
-        // ---- 헤더
+        // ---- 헤더 (화면 폭에 따라 한 줄 / 두 줄 배치는 layoutHeader 에서)
         LinearLayout header = Ui.row(this);
         int p = Ui.dp(this, 24);
-        header.setPadding(p, Ui.dp(this, 16), Ui.dp(this, 16), Ui.dp(this, 8));
+        headerRow = header;
         ImageView logo = new ImageView(this);
         logo.setImageResource(R.drawable.ic_launcher_fg);
         logo.setBackground(Ui.round(Ui.ACCENT, Ui.dp(this, 12)));
         header.addView(logo, new LinearLayout.LayoutParams(Ui.dp(this, 40), Ui.dp(this, 40)));
         TextView title = Ui.label(this, "JianNote", 26, Ui.TEXT, true);
         title.setPadding(Ui.dp(this, 12), 0, 0, 0);
+        title.setSingleLine(true);
+        title.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        headerTitle = title;
         header.addView(title);
         badge = Ui.label(this, "", 11, 0xFFFFFFFF, true);
         badge.setPadding(Ui.dp(this, 9), Ui.dp(this, 3), Ui.dp(this, 9), Ui.dp(this, 3));
         LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         blp.setMargins(Ui.dp(this, 10), 0, 0, 0);
         header.addView(badge, blp);
-        header.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
+        headerSpacer = new View(this);
+        header.addView(headerSpacer, new LinearLayout.LayoutParams(0, 1, 1f));
 
         EditText search = new EditText(this);
+        headerSearch = search;
         search.setHint("노트 검색");
         search.setSingleLine(true);
         search.setTextSize(15);
@@ -101,7 +112,7 @@ public class LibraryActivity extends Activity {
         search.setCompoundDrawablePadding(Ui.dp(this, 8));
         search.setBackground(Ui.round(0xFFFFFFFF, Ui.dp(this, 22)));
         search.setPadding(Ui.dp(this, 14), Ui.dp(this, 9), Ui.dp(this, 16), Ui.dp(this, 9));
-        header.addView(search, new LinearLayout.LayoutParams(Ui.dp(this, 240), ViewGroup.LayoutParams.WRAP_CONTENT));
+        header.addView(search);
         search.addTextChangedListener(new TextWatcher() {
             @Override
             public void beforeTextChanged(CharSequence s, int st, int c, int a) {
@@ -131,8 +142,12 @@ public class LibraryActivity extends Activity {
         LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         alp.setMargins(Ui.dp(this, 8), 0, 0, 0);
         header.addView(add, alp);
+        headerAdd = add;
         add.setOnClickListener(v -> createNotebook());
-        root.addView(header);
+        headerBox = Ui.col(this);
+        headerBox.addView(header);
+        root.addView(headerBox);
+        layoutHeader();
 
         // ---- 프리미엄 배너
         banner = Ui.row(this);
@@ -166,12 +181,11 @@ public class LibraryActivity extends Activity {
         // ---- 목록
         FrameLayout body = new FrameLayout(this);
         GridView grid = new GridView(this);
+        noteGrid = grid;
         grid.setNumColumns(GridView.AUTO_FIT);
-        grid.setColumnWidth(Ui.dp(this, 168));
         grid.setStretchMode(GridView.STRETCH_COLUMN_WIDTH);
         grid.setVerticalSpacing(Ui.dp(this, 20));
-        grid.setHorizontalSpacing(Ui.dp(this, 16));
-        grid.setPadding(p, Ui.dp(this, 12), p, Ui.dp(this, 32));
+        layoutGrid();
         grid.setClipToPadding(false);
         grid.setSelector(new android.graphics.drawable.ColorDrawable(0));
         adapter = new Adapter();
@@ -304,6 +318,54 @@ public class LibraryActivity extends Activity {
                         Toast.makeText(LibraryActivity.this, "PDF 가져오기 실패: " + m, Toast.LENGTH_LONG).show();
                     }
                 });
+    }
+
+    /** 넓은 화면: 제목·검색·버튼 한 줄 / 좁은 폰: 검색창과 새 노트 버튼을 둘째 줄로 */
+    private void layoutHeader() {
+        boolean compact = Ui.isCompact(this);
+        if (headerCompact != null && headerCompact == compact) return;
+        headerCompact = compact;
+        if (headerSearch.getParent() != null) ((ViewGroup) headerSearch.getParent()).removeView(headerSearch);
+        if (headerAdd.getParent() != null) ((ViewGroup) headerAdd.getParent()).removeView(headerAdd);
+        if (searchRow != null) headerBox.removeView(searchRow);
+        searchRow = null;
+        int p = Ui.dp(this, compact ? 16 : 24);
+        headerRow.setPadding(p, Ui.dp(this, compact ? 10 : 16), Ui.dp(this, compact ? 6 : 16), Ui.dp(this, compact ? 4 : 8));
+        headerTitle.setTextSize(compact ? 22 : 26);
+        // 좁은 화면에서는 제목이 남는 폭을 차지하고, 넘치면 … 으로 줄임
+        headerTitle.setLayoutParams(compact ? new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                : new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        headerSpacer.setVisibility(compact ? View.GONE : View.VISIBLE);
+        LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        alp.setMargins(Ui.dp(this, 8), 0, 0, 0);
+        if (compact) {
+            searchRow = Ui.row(this);
+            searchRow.setPadding(p, 0, p, Ui.dp(this, 6));
+            searchRow.addView(headerSearch, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            searchRow.addView(headerAdd, alp);
+            headerBox.addView(searchRow);
+        } else {
+            // 정렬 버튼 앞에 검색창, 맨 끝에 새 노트
+            int at = headerRow.indexOfChild(headerSpacer) + 1;
+            headerRow.addView(headerSearch, at, new LinearLayout.LayoutParams(Ui.dp(this, 240), ViewGroup.LayoutParams.WRAP_CONTENT));
+            headerRow.addView(headerAdd, alp);
+        }
+    }
+
+    /** 노트 목록 칸: 폰에서는 칸·여백을 줄여 한 줄에 두 권 이상 */
+    private void layoutGrid() {
+        boolean compact = Ui.isCompact(this);
+        int p = Ui.dp(this, compact ? 16 : 24);
+        noteGrid.setColumnWidth(Ui.dp(this, compact ? 136 : 168));
+        noteGrid.setHorizontalSpacing(Ui.dp(this, compact ? 12 : 16));
+        noteGrid.setPadding(p, Ui.dp(this, 12), p, Ui.dp(this, 32));
+    }
+
+    @Override
+    public void onConfigurationChanged(android.content.res.Configuration c) {
+        super.onConfigurationChanged(c);
+        if (headerBox != null) layoutHeader();
+        if (noteGrid != null) layoutGrid();
     }
 
     @Override

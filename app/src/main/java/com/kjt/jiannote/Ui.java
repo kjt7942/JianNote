@@ -41,6 +41,125 @@ public class Ui {
         return Math.round(v * c.getResources().getDisplayMetrics().density);
     }
 
+    /** 지금 창의 가로 폭(dp). 접는 폰·화면 분할·회전에 따라 바뀜 */
+    public static int widthDp(Context c) {
+        return c.getResources().getConfiguration().screenWidthDp;
+    }
+
+    /** 일반 스마트폰처럼 좁은 화면 (가로 600dp 미만) */
+    public static boolean isCompact(Context c) {
+        return widthDp(c) < 600;
+    }
+
+    /** 팝업 폭: 원하는 폭이 화면보다 넓으면 화면 폭에 맞춤 (px) */
+    public static int popupWidth(Context c, int wantDp) {
+        return Math.min(dp(c, wantDp), dp(c, widthDp(c) - 16));
+    }
+
+    /** 대화상자 안 격자 칸 수: 화면 폭(대화상자 여백 reservedDp 제외)에 들어가는 만큼, 최대 maxCols */
+    public static int fitCols(Context c, int cellDp, int reservedDp, int maxCols) {
+        int n = (widthDp(c) - reservedDp) / Math.max(1, cellDp);
+        return Math.max(1, Math.min(maxCols, n));
+    }
+
+    /** 자식들을 왼쪽부터 놓다가 폭이 모자라면 다음 줄로 넘기는 레이아웃 (줄마다 가운데 정렬, 줄 길이 균등) */
+    public static class FlowLayout extends ViewGroup {
+        public FlowLayout(Context c) {
+            super(c);
+        }
+
+        private int perLine(int avail) {
+            int n = 0, used = 0, count = 0;
+            for (int i = 0; i < getChildCount(); i++) {
+                View v = getChildAt(i);
+                if (v.getVisibility() == GONE) continue;
+                count++;
+                int w = v.getMeasuredWidth() + margins(v);
+                if (n == 0 || used + w <= avail) {
+                    used += w;
+                    n++;
+                } else break;
+            }
+            if (count == 0) return 1;
+            // 7+5 보다 6+6 처럼 줄 길이를 고르게
+            int lines = (count + n - 1) / n;
+            return (count + lines - 1) / lines;
+        }
+
+        private static int margins(View v) {
+            ViewGroup.LayoutParams lp = v.getLayoutParams();
+            return lp instanceof MarginLayoutParams ? ((MarginLayoutParams) lp).leftMargin + ((MarginLayoutParams) lp).rightMargin : 0;
+        }
+
+        @Override
+        protected void onMeasure(int wSpec, int hSpec) {
+            int avail = MeasureSpec.getSize(wSpec) - getPaddingLeft() - getPaddingRight();
+            for (int i = 0; i < getChildCount(); i++) {
+                View v = getChildAt(i);
+                if (v.getVisibility() != GONE) measureChildWithMargins(v, wSpec, 0, hSpec, 0);
+            }
+            int per = perLine(avail), k = 0, h = 0, lineH = 0;
+            for (int i = 0; i < getChildCount(); i++) {
+                View v = getChildAt(i);
+                if (v.getVisibility() == GONE) continue;
+                if (k > 0 && k % per == 0) {
+                    h += lineH;
+                    lineH = 0;
+                }
+                lineH = Math.max(lineH, v.getMeasuredHeight());
+                k++;
+            }
+            h += lineH + getPaddingTop() + getPaddingBottom();
+            setMeasuredDimension(MeasureSpec.getSize(wSpec), resolveSize(h, hSpec));
+        }
+
+        @Override
+        protected void onLayout(boolean changed, int l, int t, int r, int b) {
+            int avail = r - l - getPaddingLeft() - getPaddingRight();
+            int per = perLine(avail);
+            java.util.ArrayList<View> vis = new java.util.ArrayList<>();
+            for (int i = 0; i < getChildCount(); i++) if (getChildAt(i).getVisibility() != GONE) vis.add(getChildAt(i));
+            int y = getPaddingTop();
+            for (int s = 0; s < vis.size(); s += per) {
+                int e = Math.min(vis.size(), s + per), lineW = 0, lineH = 0;
+                for (int i = s; i < e; i++) {
+                    lineW += vis.get(i).getMeasuredWidth() + margins(vis.get(i));
+                    lineH = Math.max(lineH, vis.get(i).getMeasuredHeight());
+                }
+                int x = getPaddingLeft() + Math.max(0, (avail - lineW) / 2);
+                for (int i = s; i < e; i++) {
+                    View v = vis.get(i);
+                    ViewGroup.LayoutParams lp = v.getLayoutParams();
+                    int ml = lp instanceof MarginLayoutParams ? ((MarginLayoutParams) lp).leftMargin : 0;
+                    int top = y + (lineH - v.getMeasuredHeight()) / 2;
+                    v.layout(x + ml, top, x + ml + v.getMeasuredWidth(), top + v.getMeasuredHeight());
+                    x += v.getMeasuredWidth() + margins(v);
+                }
+                y += lineH;
+            }
+        }
+
+        @Override
+        protected boolean checkLayoutParams(ViewGroup.LayoutParams p) {
+            return p instanceof MarginLayoutParams;
+        }
+
+        @Override
+        protected ViewGroup.LayoutParams generateDefaultLayoutParams() {
+            return new MarginLayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        }
+
+        @Override
+        public ViewGroup.LayoutParams generateLayoutParams(android.util.AttributeSet attrs) {
+            return new MarginLayoutParams(getContext(), attrs);
+        }
+
+        @Override
+        protected ViewGroup.LayoutParams generateLayoutParams(ViewGroup.LayoutParams p) {
+            return p instanceof MarginLayoutParams ? new MarginLayoutParams((MarginLayoutParams) p) : new MarginLayoutParams(p);
+        }
+    }
+
     public static GradientDrawable round(int color, float radiusPx) {
         GradientDrawable d = new GradientDrawable();
         d.setColor(color);

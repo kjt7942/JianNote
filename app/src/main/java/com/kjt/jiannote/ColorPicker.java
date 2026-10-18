@@ -273,7 +273,7 @@ public class ColorPicker {
         pl.setPadding(0, Ui.dp(a, 10), 0, Ui.dp(a, 4));
         box.addView(pl);
         GridLayout saved = new GridLayout(a);
-        saved.setColumnCount(9);
+        saved.setColumnCount(Ui.fitCols(a, 38, 96, 9));
         box.addView(saved);
         Runnable[] refresh = new Runnable[1];
         refresh[0] = () -> {
@@ -312,7 +312,7 @@ public class ColorPicker {
         bl.setPadding(0, Ui.dp(a, 10), 0, Ui.dp(a, 4));
         box.addView(bl);
         GridLayout basics = new GridLayout(a);
-        basics.setColumnCount(9);
+        basics.setColumnCount(Ui.fitCols(a, 38, 96, 9));
         for (int col : Ui.PEN_COLORS) {
             Ui.Swatch s = new Ui.Swatch(a, col);
             s.setOnClickListener(v -> {
@@ -351,7 +351,7 @@ public class ColorPicker {
         ArrayList<Ui.Swatch> all = new ArrayList<>();
 
         GridLayout g = new GridLayout(a);
-        g.setColumnCount(8);
+        g.setColumnCount(Ui.fitCols(a, 38, 48, 8));
         for (int col : presets) {
             Ui.Swatch s = new Ui.Swatch(a, col);
             s.setChosen(col == current);
@@ -371,7 +371,7 @@ public class ColorPicker {
         pl.setPadding(0, Ui.dp(a, 8), 0, Ui.dp(a, 2));
         box.addView(pl);
         GridLayout pg = new GridLayout(a);
-        pg.setColumnCount(8);
+        pg.setColumnCount(Ui.fitCols(a, 38, 48, 8));
         box.addView(pg);
         Runnable[] fill = new Runnable[1];
         fill[0] = () -> {

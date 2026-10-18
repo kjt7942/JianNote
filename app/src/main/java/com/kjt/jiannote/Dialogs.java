@@ -227,7 +227,9 @@ public class Dialogs {
 
         root.addView(section(a, "종이 색"));
         LinearLayout paperRow = Ui.row(a);
-        root.addView(paperRow);
+        HorizontalScrollView phs = new HorizontalScrollView(a);
+        phs.addView(paperRow);
+        root.addView(phs);
         final ArrayList<Ui.Swatch> paperSw = new ArrayList<>();
         for (int i = 0; i < Paper.PAPER_COLORS.length; i++) {
             Ui.Swatch s = new Ui.Swatch(a, Paper.PAPER_COLORS[i]);
@@ -327,7 +329,9 @@ public class Dialogs {
         int pad = Ui.dp(a, 16);
         root.setPadding(pad, Ui.dp(a, 8), pad, 0);
         android.widget.GridLayout grid = new android.widget.GridLayout(a);
-        grid.setColumnCount(4);
+        // 좁은 화면이면 한 줄에 들어가는 만큼만 (대화상자 여백 약 80dp)
+        int tplCell = (landscape ? 150 : 120) + 12;
+        grid.setColumnCount(Ui.fitCols(a, tplCell, 80, 4));
         root.addView(grid);
         final int[] chosen = {current};
         final ArrayList<TemplateChip> chips = new ArrayList<>();
@@ -373,7 +377,7 @@ public class Dialogs {
         int pad = Ui.dp(a, 16);
         root.setPadding(pad, Ui.dp(a, 8), pad, 0);
         android.widget.GridLayout grid = new android.widget.GridLayout(a);
-        grid.setColumnCount(4);
+        grid.setColumnCount(Ui.fitCols(a, (landscape ? 150 : 110) + 12, 80, 4));
         root.addView(grid);
         ArrayList<Integer> colors = new ArrayList<>();
         ArrayList<String> names = new ArrayList<>();
