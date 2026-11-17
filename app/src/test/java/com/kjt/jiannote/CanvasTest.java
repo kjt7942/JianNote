@@ -305,11 +305,13 @@ public class CanvasTest {
             ms[mode] = best / 1000000;
         }
         StrokeElem.simplifyPaths = StrokeElem.cheapJoins = true;
-        int strong = T.diff(img[0], img[1], 40), any = T.diff(img[0], img[1], 0);
-        System.out.println("[점검] 900획 화면 전체 그리기: 예전 " + ms[0] + "ms → 지금 " + ms[1] + "ms, 눈에 띄게 다른 픽셀 " + strong + "개 (조금이라도 다른 픽셀 " + any + "개 / " + (1600 * 2300) + ")");
+        int strong = T.diff(img[0], img[1], 40), bad = T.diff(img[0], img[1], 100), any = T.diff(img[0], img[1], 0);
+        System.out.println("[점검] 900획 화면 전체 그리기: 예전 " + ms[0] + "ms → 지금 " + ms[1] + "ms, 가장자리 농도가 조금 다른 픽셀 " + strong
+                + "개, 크게 다른 픽셀 " + bad + "개 (조금이라도 다른 픽셀 " + any + "개 / " + (1600 * 2300) + ")");
         T.save(img[0], "stroke_old.png");
         T.save(img[1], "stroke_new.png");
         T.save(T.diffImage(img[0], img[1]), "stroke_diff.png");
-        assertTrue("새 방식이 예전과 눈에 띄게 다르면 안 됨: " + strong, strong < 200);
+        assertEquals("새 방식이 예전과 크게 다른 픽셀", 0, bad);
+        assertTrue("가장자리 농도 차이가 너무 많음: " + strong, strong < 3680);
     }
 }

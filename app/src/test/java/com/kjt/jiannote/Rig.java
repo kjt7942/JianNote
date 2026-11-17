@@ -32,6 +32,8 @@ public class Rig implements CanvasView.Listener {
     public final int W, H;
     public long now = 100000;
     public int checks;
+    /** 가는 선은 그리기 시작점에 따라 농도가 1~2단계 달라질 수 있어 그 정도는 같은 것으로 본다 (255단계 중) */
+    static final int TOL = 3;
 
     public Rig(Document d, int w, int h) {
         act = Robolectric.buildActivity(Activity.class).setup().get();
@@ -167,7 +169,7 @@ public class Rig implements CanvasView.Listener {
         }
         cv.invalidateScene();
         Bitmap b = snap();
-        int d = T.diff(a, b, 0);
+        int d = T.diff(a, b, TOL);
         if (d != 0) {
             String n = "FAIL_" + what.replaceAll("[^A-Za-z0-9가-힣]+", "_");
             T.save(a, n + "_got.png");
@@ -179,7 +181,7 @@ public class Rig implements CanvasView.Listener {
             cv.debugForceCache = true;
             Bitmap cb = snap();
             cv.debugForceCache = false;
-            int dc = T.diff(ca, cb, 0);
+            int dc = T.diff(ca, cb, TOL);
             if (dc != 0) {
                 String n = "FAIL_cache_" + what.replaceAll("[^A-Za-z0-9가-힣]+", "_");
                 T.save(ca, n + "_got.png");
