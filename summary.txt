@@ -1,0 +1,18 @@
+    [점검] 저장 후 다시 읽기: 화면 일치
+AppTest > saveAndReloadKeepsEverything PASSED
+    [점검] 손상된 파일 복구 5가지 경우 통과
+AppTest > damagedFileFallsBackToBackup PASSED
+    [점검] 편집 화면: 버튼 96번 눌러 봄, 오류 없음
+AppTest > editorOpensEveryButtonWorksAndSaves PASSED
+    [점검] 서재 화면: 버튼 5개 눌러 봄, 오류 없음
+AppTest > libraryOpensAndEveryButtonWorks PASSED
+    [점검] 올가미 선택 56개
+    [점검] 화면 비교 25번 모두 일치
+CanvasTest > toolsRedrawOnlyWhatChanged PASSED
+    [점검] 900획 화면 전체 그리기: 예전 64ms → 지금 62ms, 가장자리 농도가 조금 다른 픽셀 455개, 크게 다른 픽셀 0개 (조금이라도 다른 픽셀 25181개 / 3680000)
+CanvasTest > fasterStrokesLookTheSame PASSED
+    [점검] 무작위 사용 6회 × 220동작, 화면 비교 330번 모두 일치
+CanvasTest > randomUseNeverBreaks PASSED
+    [점검] 700획 페이지 1600px 그리기 55ms
+HarnessTest > rendersPage PASSED
+BUILD SUCCESSFUL in 1m 47s
