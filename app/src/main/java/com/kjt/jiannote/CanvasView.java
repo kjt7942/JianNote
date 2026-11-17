@@ -622,6 +622,7 @@ public class CanvasView extends View {
             if (listener != null) listener.onLayerLimit();
             return false;
         }
+        clearSelection(); // 선택은 지금 레이어의 것이므로, 레이어가 바뀌기 전에 푼다
         ArrayList<Layer> before = new ArrayList<>(p.layers);
         p.layers.add(activeLayer + 1, new Layer("레이어 " + (p.layers.size() + 1)));
         activeLayer++;
@@ -632,10 +633,11 @@ public class CanvasView extends View {
 
     public void deleteLayer(int i) {
         Page p = page();
-        if (p.layers.size() <= 1) return;
+        if (p.layers.size() <= 1 || i < 0 || i >= p.layers.size()) return;
         clearSelection();
         ArrayList<Layer> before = new ArrayList<>(p.layers);
         p.layers.remove(i);
+        if (i < activeLayer) activeLayer--; // 아래 레이어를 지워도 쓰던 레이어를 그대로 가리키게
         activeLayer = Math.max(0, Math.min(activeLayer, p.layers.size() - 1));
         undo.push(new UndoManager.LayersCmd(pageIndex, p, before, new ArrayList<>(p.layers)));
         changed();
@@ -645,6 +647,7 @@ public class CanvasView extends View {
         Page p = page();
         int j = i + dir;
         if (j < 0 || j >= p.layers.size()) return;
+        clearSelection();
         ArrayList<Layer> before = new ArrayList<>(p.layers);
         Layer l = p.layers.remove(i);
         p.layers.add(j, l);
@@ -656,7 +659,8 @@ public class CanvasView extends View {
 
     public void mergeLayerDown(int i) {
         Page p = page();
-        if (i <= 0) return;
+        if (i <= 0 || i >= p.layers.size()) return;
+        clearSelection();
         ArrayList<Layer> before = new ArrayList<>(p.layers);
         Layer top = p.layers.get(i);
         Layer below = p.layers.get(i - 1).copy();
