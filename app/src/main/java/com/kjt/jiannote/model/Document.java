@@ -19,7 +19,8 @@ public class Document {
 
     public void write(File f) throws IOException {
         File tmp = new File(f.getPath() + ".tmp");
-        try (DataOutputStream o = new DataOutputStream(new BufferedOutputStream(new FileOutputStream(tmp), 1 << 16))) {
+        try (FileOutputStream fos = new FileOutputStream(tmp);
+             DataOutputStream o = new DataOutputStream(new BufferedOutputStream(fos, 1 << 16))) {
             o.writeInt(MAGIC);
             o.writeInt(VERSION);
             o.writeInt(pages.size());
@@ -43,6 +44,12 @@ public class Document {
                         e.write(o);
                     }
                 }
+            }
+            // 저장 도중 전원이 꺼져도 빈 파일로 남지 않게, 디스크에 다 쓰인 것을 확인한 뒤에 바꿔 끼운다
+            o.flush();
+            try {
+                fos.getFD().sync();
+            } catch (IOException ignored) {
             }
         }
         // 직전 저장본을 .bak 으로 보관해 파일 손상에 대비
@@ -101,6 +108,8 @@ public class Document {
             if (in.readInt() != MAGIC) throw new IOException("not an InkShelf file");
             int ver = in.readInt();
             int pc = in.readInt();
+            if (ver < 1 || ver > VERSION) throw new IOException("지원하지 않는 파일 버전 " + ver);
+            if (pc < 0 || pc > 100000) throw new IOException("손상된 파일 (페이지 수 " + pc + ")");
             for (int i = 0; i < pc; i++) {
                 Page p = new Page(in.readFloat(), in.readFloat(), in.readInt());
                 if (ver >= 2) p.bookmarked = in.readBoolean();
@@ -117,11 +126,13 @@ public class Document {
                     }
                 }
                 int lc = in.readInt();
+                if (lc < 0 || lc > 10000) throw new IOException("손상된 파일 (레이어 수 " + lc + ")");
                 for (int j = 0; j < lc; j++) {
                     Layer l = new Layer(in.readUTF());
                     l.visible = in.readBoolean();
                     l.alpha = in.readInt();
                     int ec = in.readInt();
+                    if (ec < 0 || ec > 20000000) throw new IOException("손상된 파일 (요소 수 " + ec + ")");
                     for (int k = 0; k < ec; k++) {
                         boolean locked = ver >= 4 && (in.readByte() & 1) != 0;
                         int group = ver >= 5 ? in.readInt() : 0;

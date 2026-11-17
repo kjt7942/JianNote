@@ -47,7 +47,18 @@ public class RenderContext {
             if (!f.exists()) return null;
             BitmapFactory.Options o = new BitmapFactory.Options();
             if (name.endsWith(".jpg")) o.inPreferredConfig = Bitmap.Config.RGB_565;
-            b = BitmapFactory.decodeFile(f.getPath(), o);
+            try {
+                b = BitmapFactory.decodeFile(f.getPath(), o);
+            } catch (OutOfMemoryError oom) {
+                // 메모리가 모자라면 절반 크기로 다시 읽는다 (앱이 꺼지는 것보다 낫다)
+                cache.evictAll();
+                o.inSampleSize = 2;
+                try {
+                    b = BitmapFactory.decodeFile(f.getPath(), o);
+                } catch (OutOfMemoryError oom2) {
+                    b = null;
+                }
+            }
             if (b != null) cache.put(name, b);
         }
         return b;

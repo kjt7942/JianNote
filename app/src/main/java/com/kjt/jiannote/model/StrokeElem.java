@@ -511,6 +511,7 @@ public class StrokeElem extends Element {
         int penRaw = in.readInt();
         int color = in.readInt();
         int n = in.readInt();
+        if (n < 0 || n > 4000000) throw new IOException("손상된 획 (점 " + n + "개)");
         float[] p = new float[3 * Math.max(n, 1)];
         for (int i = 0; i < 3 * n; i++) p[i] = in.readFloat();
         return new StrokeElem(penRaw & 0xFF, color, (penRaw & SQUARE_FLAG) != 0, p, n);
