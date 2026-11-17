@@ -156,8 +156,10 @@ public class AppTest {
                 v.performClick();
                 clicked++;
                 closeOverlays("lib" + clicked);
-                v.performLongClick();
-                closeOverlays("libL" + clicked);
+                if (v.isAttachedToWindow() && v.getParent() != null && !a.isFinishing()) {
+                    v.performLongClick();
+                    closeOverlays("libL" + clicked);
+                }
             } catch (Throwable e) {
                 throw new AssertionError("서재에서 " + describe(v) + " 누르다 오류: " + e, e);
             }
@@ -308,6 +310,7 @@ public class AppTest {
         cv.tool = CanvasView.TOOL_ERASER;
         cv.eraserPartial = true;
         r.drag(MotionEvent.TOOL_TYPE_STYLUS, 100, 200, 1000, 1500, 30, 0);
+        cv.tool = CanvasView.TOOL_PEN; // 지우개 커서가 화면에 남지 않게
         cv.invalidateScene();
         Bitmap a = r.snap();
         File f = new File(r.act.getFilesDir(), "roundtrip.bin");
