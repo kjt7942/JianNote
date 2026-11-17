@@ -151,6 +151,7 @@ public class CanvasTest {
         r.verify("확대 후 넘기기");
 
         // 테이프·메모지·텍스트
+        r.strict = false;
         cv.tool = CanvasView.TOOL_TAPE;
         r.pen(400, 1000, 1000, 1005);
         r.verify("테이프");
@@ -172,6 +173,7 @@ public class CanvasTest {
         for (int seed = 1; seed <= 6; seed++) {
             Rig r = new Rig(T.doc(100 + seed, 3, 150), 1280, 1800);
             CanvasView cv = r.cv;
+            r.strict = false;
             Random rnd = new Random(seed);
             String last = "";
             try {

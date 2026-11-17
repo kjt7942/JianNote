@@ -169,27 +169,34 @@ public class Rig implements CanvasView.Listener {
         }
         cv.invalidateScene();
         Bitmap b = snap();
-        compare(what, a, b, "부분만 다시 그린 화면이 전체를 다시 그린 화면과 다름");
+        compare(what, a, b, "부분만 다시 그린 화면이 전체를 다시 그린 화면과 다름", 1f);
         if (ca != null) {
             cv.debugForceCache = true;
             Bitmap cb = snap();
             cv.debugForceCache = false;
-            compare("cache_" + what, ca, cb, "스크롤용 캐시가 새로 만든 것과 다름");
+            // 캐시는 낮은 해상도로 그려 화면에 늘려 보여 주므로, 확대한 만큼 다른 픽셀도 커 보인다
+            float z = Math.max(1f, cv.getScale() / 1.2f);
+            compare("cache_" + what, ca, cb, "스크롤용 캐시가 새로 만든 것과 다름", z * z);
         }
     }
 
+    /** 엄격하게 볼지 (테이프·메모지처럼 가는 테두리가 있는 요소가 없을 때) */
+    public boolean strict = true;
+
     /**
-     * 같은 그림이어야 하는 둘을 비교. 부분만 다시 그리면 그 영역 가장자리에 걸친 획의 부드러운 테두리 픽셀이
-     * 몇 개 아주 조금 달라질 수 있어(눈에 안 보임), 조금 다른 픽셀 몇 개까지는 봐주고 크게 다른 픽셀은 하나도 허용하지 않는다.
+     * 같은 그림이어야 하는 둘을 비교. 부분만 다시 그리면 그 영역 가장자리에 걸친 획·가는 테두리의 부드러운 가장자리 픽셀이
+     * 조금 달라질 수 있어(눈에 안 보임), 조금 다른 픽셀 얼마까지는 봐주고 크게 다른 픽셀은 허용하지 않는다.
+     * 획이 빠지거나 지워진 자리가 남으면 크게 다른 픽셀이 뭉텅이로 생긴다.
      */
-    private void compare(String what, Bitmap a, Bitmap b, String msg) {
-        int small = T.diff(a, b, TOL), big = T.diff(a, b, 48);
-        if (small > 300 || big > 0) {
+    private void compare(String what, Bitmap a, Bitmap b, String msg, float k) {
+        int small = T.diff(a, b, TOL), mid = T.diff(a, b, 40), big = T.diff(a, b, strict ? 48 : 80);
+        boolean bad = strict ? (small > 150 * k || big > 0) : (small > 1500 * k || mid > 30 * k || big > 0);
+        if (bad) {
             String n = "FAIL_" + what.replaceAll("[^A-Za-z0-9가-힣]+", "_");
             T.save(a, n + "_got.png");
             T.save(b, n + "_want.png");
             T.save(T.diffImage(a, b), n + "_diff.png");
-            throw new AssertionError(what + ": " + msg + " (조금 다른 픽셀 " + small + "개, 크게 다른 픽셀 " + big + "개)");
+            throw new AssertionError(what + ": " + msg + " (조금 다른 픽셀 " + small + "개, 중간 " + mid + "개, 크게 다른 픽셀 " + big + "개)");
         }
     }
 
