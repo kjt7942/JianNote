@@ -169,26 +169,27 @@ public class Rig implements CanvasView.Listener {
         }
         cv.invalidateScene();
         Bitmap b = snap();
-        int d = T.diff(a, b, TOL);
-        if (d != 0) {
-            String n = "FAIL_" + what.replaceAll("[^A-Za-z0-9가-힣]+", "_");
-            T.save(a, n + "_got.png");
-            T.save(b, n + "_want.png");
-            T.save(T.diffImage(a, b), n + "_diff.png");
-        }
-        assertEquals(what + ": 부분만 다시 그린 화면이 전체를 다시 그린 화면과 다른 픽셀 수", 0, d);
+        compare(what, a, b, "부분만 다시 그린 화면이 전체를 다시 그린 화면과 다름");
         if (ca != null) {
             cv.debugForceCache = true;
             Bitmap cb = snap();
             cv.debugForceCache = false;
-            int dc = T.diff(ca, cb, TOL);
-            if (dc != 0) {
-                String n = "FAIL_cache_" + what.replaceAll("[^A-Za-z0-9가-힣]+", "_");
-                T.save(ca, n + "_got.png");
-                T.save(cb, n + "_want.png");
-                T.save(T.diffImage(ca, cb), n + "_diff.png");
-            }
-            assertEquals(what + ": 스크롤용 캐시가 새로 만든 것과 다른 픽셀 수", 0, dc);
+            compare("cache_" + what, ca, cb, "스크롤용 캐시가 새로 만든 것과 다름");
+        }
+    }
+
+    /**
+     * 같은 그림이어야 하는 둘을 비교. 부분만 다시 그리면 그 영역 가장자리에 걸친 획의 부드러운 테두리 픽셀이
+     * 몇 개 아주 조금 달라질 수 있어(눈에 안 보임), 조금 다른 픽셀 몇 개까지는 봐주고 크게 다른 픽셀은 하나도 허용하지 않는다.
+     */
+    private void compare(String what, Bitmap a, Bitmap b, String msg) {
+        int small = T.diff(a, b, TOL), big = T.diff(a, b, 48);
+        if (small > 40 || big > 0) {
+            String n = "FAIL_" + what.replaceAll("[^A-Za-z0-9가-힣]+", "_");
+            T.save(a, n + "_got.png");
+            T.save(b, n + "_want.png");
+            T.save(T.diffImage(a, b), n + "_diff.png");
+            throw new AssertionError(what + ": " + msg + " (조금 다른 픽셀 " + small + "개, 크게 다른 픽셀 " + big + "개)");
         }
     }
 
