@@ -1787,7 +1787,8 @@ public class CanvasView extends View {
         }
         lastSx = sx;
         lastSy = sy;
-        if (t != TOOL_LASSO && t != TOOL_TEXT && t != TOOL_ERASER) clearSelection();
+        // 지우개도 선택을 먼저 푼다: 선택된 것을 지우면 선택 상자에 이미 지워진 것이 남아, 옮길 때 되살아나거나 사라진다
+        if (t != TOOL_LASSO && t != TOOL_TEXT) clearSelection();
         switch (t) {
             case TOOL_PEN: {
                 inputKind = IN_STROKE;

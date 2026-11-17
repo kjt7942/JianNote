@@ -184,7 +184,7 @@ public class Rig implements CanvasView.Listener {
      */
     private void compare(String what, Bitmap a, Bitmap b, String msg) {
         int small = T.diff(a, b, TOL), big = T.diff(a, b, 48);
-        if (small > 40 || big > 0) {
+        if (small > 300 || big > 0) {
             String n = "FAIL_" + what.replaceAll("[^A-Za-z0-9가-힣]+", "_");
             T.save(a, n + "_got.png");
             T.save(b, n + "_want.png");

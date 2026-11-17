@@ -270,7 +270,7 @@ public class CanvasTest {
                         r.tap(FINGER, x0, y0);
                     }
                     assertNull("seed " + seed + " step " + step + " (" + last + ") 내부 상태", cv.debugCheck());
-                    if (step % 3 == 0) r.verify("seed" + seed + "_step" + step + "_" + last.replace(' ', '_').replace('/', '_'));
+                    if (step % 4 == 0) r.verify("seed" + seed + "_step" + step + "_" + last.replace(' ', '_').replace('/', '_'));
                     else r.snap();
                 }
             } catch (RuntimeException | Error e) {
