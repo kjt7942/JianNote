@@ -133,67 +133,114 @@ public class StrokeElem extends Element {
                     path.lineTo(x, y);
                 }
             }
+        } else if (built == 0 && n > 2 && simplifyPaths) {
+            // 완성된 획: 거의 일직선 위에 놓인 점은 건너뛰고 그린다 (모양은 그대로, 그리는 양은 크게 줄어듦)
+            int[] keep = new int[n];
+            int m = simplify(keep);
+            for (int q = 0; q < m; q++) addPoint(q == 0 ? -1 : keep[q - 1], keep[q], q == m - 1 ? -1 : keep[q + 1]);
         } else {
-            for (int i = built; i < n; i++) {
-                float x = pts[3 * i], y = pts[3 * i + 1], r = Math.max(pts[3 * i + 2] / 2f, 0.35f);
-                boolean endpoint = i == 0 || i == n - 1;
-                // 점마다 원을 넣으면 획이 많은 페이지를 그리는 데 오래 걸린다.
-                // 거의 곧게 이어지는 점은 원을 빼고, 조금 꺾이는 점은 작은 삼각형으로 틈만 메운다.
-                int join = 2; // 0 = 없음, 1 = 삼각형, 2 = 원
-                if (!endpoint) {
-                    float ax = x - pts[3 * (i - 1)], ay = y - pts[3 * (i - 1) + 1];
-                    float bx = pts[3 * (i + 1)] - x, by = pts[3 * (i + 1) + 1] - y;
-                    float la = (float) Math.hypot(ax, ay), lb = (float) Math.hypot(bx, by);
-                    if (la > 0.01f && lb > 0.01f) {
-                        float cos = (ax * bx + ay * by) / (la * lb);
-                        if (cos > 0.5f) {
-                            float cross = (ax * by - ay * bx) / (la * lb);
-                            float err = r * (1f - (float) Math.sqrt((1f + cos) / 2f)); // 원 대신 삼각형을 썼을 때 모자라는 두께
-                            if (r * Math.abs(cross) < 0.012f) {
-                                join = 0;
-                            } else if (err < 0.06f) {
-                                join = 1;
-                                // 앞 구간과 뒤 구간의 옆 방향(법선)
-                                float n1x = -ay / la * r, n1y = ax / la * r, n2x = -by / lb * r, n2y = bx / lb * r;
-                                if (cross > 0) { // 사각형·원과 같은 방향으로 돌게 순서를 맞춘다 (방향이 다르면 겹친 곳이 비어 보임)
-                                    float tx = n1x, ty = n1y;
-                                    n1x = n2x; n1y = n2y;
-                                    n2x = tx; n2y = ty;
-                                }
-                                path.moveTo(x, y);
-                                path.lineTo(x + n1x, y + n1y);
-                                path.lineTo(x + n2x, y + n2y);
-                                path.close();
-                                path.moveTo(x, y);
-                                path.lineTo(x - n1x, y - n1y);
-                                path.lineTo(x - n2x, y - n2y);
-                                path.close();
-                            }
+            for (int i = built; i < n; i++) addPoint(i - 1, i, i + 1 < n ? i + 1 : -1);
+        }
+        built = n;
+    }
+
+    /** 점검·비상용 스위치: 끄면 예전 방식(점마다 원)으로 그린다 */
+    public static boolean simplifyPaths = true, cheapJoins = true;
+
+    /** 점 i 에서의 이음 모양과, 앞 점(ip)에서 i 까지의 몸통 사각형을 경로에 추가. ip/in = 앞/뒤 점 (없으면 -1) */
+    private void addPoint(int ip, int i, int in) {
+        float x = pts[3 * i], y = pts[3 * i + 1], r = Math.max(pts[3 * i + 2] / 2f, 0.35f);
+        boolean endpoint = ip < 0 || in < 0;
+        // 점마다 원을 넣으면 획이 많은 페이지를 그리는 데 오래 걸린다.
+        // 거의 곧게 이어지는 점은 원을 빼고, 조금 꺾이는 점은 작은 삼각형으로 틈만 메운다.
+        int join = 2; // 0 = 없음, 1 = 삼각형, 2 = 원
+        if (!endpoint && cheapJoins) {
+            float ax = x - pts[3 * ip], ay = y - pts[3 * ip + 1];
+            float bx = pts[3 * in] - x, by = pts[3 * in + 1] - y;
+            float la = (float) Math.hypot(ax, ay), lb = (float) Math.hypot(bx, by);
+            if (la > 0.01f && lb > 0.01f) {
+                float cos = (ax * bx + ay * by) / (la * lb);
+                if (cos > 0.5f) {
+                    float cross = (ax * by - ay * bx) / (la * lb);
+                    float err = r * (1f - (float) Math.sqrt((1f + cos) / 2f)); // 원 대신 삼각형을 썼을 때 모자라는 두께
+                    if (r * Math.abs(cross) < 0.012f) {
+                        join = 0;
+                    } else if (err < 0.06f) {
+                        join = 1;
+                        // 앞 구간과 뒤 구간의 옆 방향(법선)
+                        float n1x = -ay / la * r, n1y = ax / la * r, n2x = -by / lb * r, n2y = bx / lb * r;
+                        if (cross > 0) { // 사각형·원과 같은 방향으로 돌게 순서를 맞춘다 (방향이 다르면 겹친 곳이 비어 보임)
+                            float sx = n1x, sy = n1y;
+                            n1x = n2x; n1y = n2y;
+                            n2x = sx; n2y = sy;
                         }
-                    }
-                }
-                // 네모 끝: 양 끝점에는 둥근 마개를 그리지 않음 (완성된 획에서만 판단 가능)
-                if (join == 2 && (!square || !endpoint || n == 1)) {
-                    if (square && n == 1) path.addRect(x - r, y - r, x + r, y + r, Path.Direction.CCW);
-                    else path.addCircle(x, y, r, Path.Direction.CCW);
-                }
-                if (i > 0) {
-                    float px = pts[3 * (i - 1)], py = pts[3 * (i - 1) + 1];
-                    float pr = Math.max(pts[3 * (i - 1) + 2] / 2f, 0.35f);
-                    float dx = x - px, dy = y - py;
-                    float len = (float) Math.hypot(dx, dy);
-                    if (len > 0.01f) {
-                        float nx = -dy / len, ny = dx / len;
-                        path.moveTo(px + nx * pr, py + ny * pr);
-                        path.lineTo(x + nx * r, y + ny * r);
-                        path.lineTo(x - nx * r, y - ny * r);
-                        path.lineTo(px - nx * pr, py - ny * pr);
+                        path.moveTo(x, y);
+                        path.lineTo(x + n1x, y + n1y);
+                        path.lineTo(x + n2x, y + n2y);
+                        path.close();
+                        path.moveTo(x, y);
+                        path.lineTo(x - n1x, y - n1y);
+                        path.lineTo(x - n2x, y - n2y);
                         path.close();
                     }
                 }
             }
         }
-        built = n;
+        // 네모 끝: 양 끝점에는 둥근 마개를 그리지 않음 (완성된 획에서만 판단 가능)
+        if (join == 2 && (!square || !(i == 0 || i == n - 1) || n == 1)) {
+            if (square && n == 1) path.addRect(x - r, y - r, x + r, y + r, Path.Direction.CCW);
+            else path.addCircle(x, y, r, Path.Direction.CCW);
+        }
+        if (ip >= 0) {
+            float px = pts[3 * ip], py = pts[3 * ip + 1];
+            float pr = Math.max(pts[3 * ip + 2] / 2f, 0.35f);
+            float dx = x - px, dy = y - py;
+            float len = (float) Math.hypot(dx, dy);
+            if (len > 0.01f) {
+                float nx = -dy / len, ny = dx / len;
+                path.moveTo(px + nx * pr, py + ny * pr);
+                path.lineTo(x + nx * r, y + ny * r);
+                path.lineTo(x - nx * r, y - ny * r);
+                path.lineTo(px - nx * pr, py - ny * pr);
+                path.close();
+            }
+        }
+    }
+
+    /** 그릴 때 건너뛰어도 되는 점을 뺀 점 번호 목록을 keep 에 채우고 개수를 돌려준다 (위치 오차 0.05, 굵기는 선형 보간에 가까울 때만) */
+    private int simplify(int[] keep) {
+        int m = 0;
+        keep[m++] = 0;
+        int a = 0;
+        while (a < n - 1) {
+            int best = a + 1;
+            int lim = Math.min(n - 1, a + 12);
+            for (int j = a + 2; j <= lim; j++) {
+                if (!fits(a, j)) break;
+                best = j;
+            }
+            keep[m++] = best;
+            a = best;
+        }
+        return m;
+    }
+
+    private boolean fits(int a, int j) {
+        float ax = pts[3 * a], ay = pts[3 * a + 1], aw = pts[3 * a + 2];
+        float bx = pts[3 * j], by = pts[3 * j + 1], bw = pts[3 * j + 2];
+        float dx = bx - ax, dy = by - ay;
+        float l2 = dx * dx + dy * dy;
+        if (l2 < 1e-6f) return false;
+        for (int k = a + 1; k < j; k++) {
+            float px = pts[3 * k], py = pts[3 * k + 1];
+            float t = ((px - ax) * dx + (py - ay) * dy) / l2;
+            if (t < 0f || t > 1f) return false; // 되돌아가는 점은 남긴다
+            float ex = ax + t * dx - px, ey = ay + t * dy - py;
+            if (ex * ex + ey * ey > 0.05f * 0.05f) return false;
+            float w = aw + (bw - aw) * t;
+            if (Math.abs(pts[3 * k + 2] - w) > 0.04f + 0.02f * w) return false;
+        }
+        return true;
     }
 
     /** 그리는 중(점이 계속 추가됨)에는 네모 끝 판단이 바뀌므로 경로를 다시 만든다 */
@@ -464,6 +511,7 @@ public class StrokeElem extends Element {
         int penRaw = in.readInt();
         int color = in.readInt();
         int n = in.readInt();
+        if (n < 0 || n > 4000000) throw new IOException("손상된 획 (점 " + n + "개)");
         float[] p = new float[3 * Math.max(n, 1)];
         for (int i = 0; i < 3 * n; i++) p[i] = in.readFloat();
         return new StrokeElem(penRaw & 0xFF, color, (penRaw & SQUARE_FLAG) != 0, p, n);

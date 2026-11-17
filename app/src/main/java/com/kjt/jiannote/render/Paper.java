@@ -40,9 +40,28 @@ public class Paper {
         FILL.setStyle(Paint.Style.FILL);
         c.drawRect(0, 0, pw, ph, FILL);
         RectF r = new RectF(0, 0, pw, ph);
-        if (vis != null && !r.intersect(vis)) return;
+        if (vis != null) {
+            // 일부만 다시 그릴 때: 선의 굵기만큼 여유를 두고 고른다.
+            // (선의 중심이 영역 바로 밖에 있어도 굵기의 절반은 영역 안에 걸쳐 있어, 빼먹으면 선이 반쯤 지워진다)
+            RectF v = new RectF(vis);
+            float m = margin(scale);
+            v.inset(-m, -m);
+            if (!r.intersect(v)) return;
+        }
         setup(paperColor, scale);
         float top = 150;
+        c.save();
+        c.clipRect(0, 0, pw, ph);
+        drawPattern(c, template, r, pw, ph, top, scale);
+        c.restore();
+    }
+
+    /** 선·점이 차지하는 반 굵기보다 넉넉한 여유 */
+    private static float margin(float scale) {
+        return 3f + 2f / Math.max(scale, 0.01f);
+    }
+
+    private static void drawPattern(Canvas c, int template, RectF r, float pw, float ph, float top, float scale) {
         switch (template) {
             case LINED: {
                 hLines(c, r, top, ph - 60, 50, 0, pw);
@@ -93,6 +112,17 @@ public class Paper {
         FILL.setStyle(Paint.Style.FILL);
         c.drawRect(vis, FILL);
         setup(paperColor, scale);
+        // 선 굵기만큼 여유를 두고 그린다 (바탕색을 칠한 영역 밖으로는 나가지 않게 자름)
+        c.save();
+        c.clipRect(vis);
+        vis = new RectF(vis);
+        float mg = margin(scale);
+        vis.inset(-mg, -mg);
+        drawInfinitePattern(c, template, vis, scale);
+        c.restore();
+    }
+
+    private static void drawInfinitePattern(Canvas c, int template, RectF vis, float scale) {
         switch (template) {
             case LINED:
             case CORNELL:

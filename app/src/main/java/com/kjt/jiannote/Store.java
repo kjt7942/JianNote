@@ -93,10 +93,17 @@ public class Store {
         File f = new File(dir(id), "doc.bin");
         try {
             return Document.read(f);
-        } catch (Exception e) {
+        } catch (Exception | OutOfMemoryError e) {
+            // 파일이 손상됐으면 직전 저장본으로 되살린다
             File bak = new File(dir(id), "doc.bin.bak");
-            if (bak.exists()) return Document.read(bak);
-            throw e instanceof IOException ? (IOException) e : new IOException(e);
+            if (bak.exists()) {
+                try {
+                    return Document.read(bak);
+                } catch (Exception | OutOfMemoryError e2) {
+                    throw new IOException("노트 파일이 손상되었습니다", e2);
+                }
+            }
+            throw e instanceof IOException ? (IOException) e : new IOException("노트 파일이 손상되었습니다", e);
         }
     }
 

@@ -157,7 +157,7 @@ public class CanvasView extends View {
     private final java.util.LinkedHashMap<Page, Bitmap> pageCache = new java.util.LinkedHashMap<Page, Bitmap>(8, 0.75f, true) {
         @Override
         protected boolean removeEldestEntry(java.util.Map.Entry<Page, Bitmap> e) {
-            if (size() > 6) {
+            if (size() > 4) {
                 e.getValue().recycle();
                 return true;
             }
@@ -181,6 +181,10 @@ public class CanvasView extends View {
     private Bitmap selBmp;
     private RectF selBmpRect;
     private float selBmpScale;
+    /** selBmp 가 화면 픽셀에 맞춰 그려졌는지 (그러면 그대로 옮겨 그려도 흐려지지 않음) */
+    private boolean selBmpExact;
+    /** 점검용: 스크롤 중 화면(페이지 캐시)을 강제로 사용 */
+    boolean debugForceCache;
     private long lastRenderMs = 0;
     private final Matrix tmpMatrix = new Matrix();
     private final Paint bitmapPaint = new Paint(Paint.FILTER_BITMAP_FLAG);
@@ -470,7 +474,11 @@ public class CanvasView extends View {
     }
 
     private static float cacheScale(Page p) {
-        return Math.min(1.6f, 1500f / Math.max(1f, p.w));
+        float cs = Math.min(1.6f, 1500f / Math.max(1f, p.w));
+        // 아주 길거나 큰 페이지는 그림 크기가 지나치게 커지지 않게 (약 400만 픽셀까지)
+        double px = (double) p.w * cs * p.h * cs;
+        if (px > 4.0e6) cs *= (float) Math.sqrt(4.0e6 / px);
+        return cs;
     }
 
     /**
@@ -517,6 +525,38 @@ public class CanvasView extends View {
             listener.onHistoryChanged();
             listener.onDocChanged();
         }
+    }
+
+    /** 점검용: 내부 상태가 서로 맞는지 확인하고, 어긋난 것이 있으면 설명을 돌려준다 (없으면 null) */
+    String debugCheck() {
+        if (doc == null) return null;
+        if (pageIndex < 0 || pageIndex >= doc.pages.size()) return "pageIndex " + pageIndex + "/" + doc.pages.size();
+        if (pageTop.length != doc.pages.size()) return "layout " + pageTop.length + " != " + doc.pages.size();
+        Page p = page();
+        if (p.layers.isEmpty()) return "no layers";
+        if (activeLayer < 0 || activeLayer >= p.layers.size()) return "activeLayer " + activeLayer + "/" + p.layers.size();
+        if (selection.size() != excluded.size()) return "selection " + selection.size() + " != excluded " + excluded.size();
+        if (selection.isEmpty() != (selBounds == null)) return "selBounds mismatch";
+        HashSet<Element> in = new HashSet<>(activeLayer().elems);
+        for (Element e : selection) {
+            if (!excluded.contains(e)) return "selected but not excluded";
+            if (!in.contains(e)) return "selected element is not in the active layer";
+        }
+        if (Float.isNaN(scale) || Float.isNaN(tx) || Float.isNaN(ty) || scale <= 0) return "bad transform " + scale + "," + tx + "," + ty;
+        for (Layer l : p.layers) for (Element e : l.elems) {
+            if (e == null) return "null element";
+            RectF b = e.bounds();
+            if (Float.isNaN(b.left) || Float.isNaN(b.top) || Float.isNaN(b.right) || Float.isNaN(b.bottom)) return "NaN bounds";
+        }
+        return null;
+    }
+
+    int debugSelectionSize() {
+        return selection.size();
+    }
+
+    RectF debugSelScreenBounds() {
+        return selBounds == null ? null : screenSelBounds();
     }
 
     /** 입력(필기·지우기·끌기) 중인지 — 자동 저장을 잠시 미루는 데 쓴다 */
@@ -582,6 +622,7 @@ public class CanvasView extends View {
             if (listener != null) listener.onLayerLimit();
             return false;
         }
+        clearSelection(); // 선택은 지금 레이어의 것이므로, 레이어가 바뀌기 전에 푼다
         ArrayList<Layer> before = new ArrayList<>(p.layers);
         p.layers.add(activeLayer + 1, new Layer("레이어 " + (p.layers.size() + 1)));
         activeLayer++;
@@ -592,10 +633,11 @@ public class CanvasView extends View {
 
     public void deleteLayer(int i) {
         Page p = page();
-        if (p.layers.size() <= 1) return;
+        if (p.layers.size() <= 1 || i < 0 || i >= p.layers.size()) return;
         clearSelection();
         ArrayList<Layer> before = new ArrayList<>(p.layers);
         p.layers.remove(i);
+        if (i < activeLayer) activeLayer--; // 아래 레이어를 지워도 쓰던 레이어를 그대로 가리키게
         activeLayer = Math.max(0, Math.min(activeLayer, p.layers.size() - 1));
         undo.push(new UndoManager.LayersCmd(pageIndex, p, before, new ArrayList<>(p.layers)));
         changed();
@@ -605,6 +647,7 @@ public class CanvasView extends View {
         Page p = page();
         int j = i + dir;
         if (j < 0 || j >= p.layers.size()) return;
+        clearSelection();
         ArrayList<Layer> before = new ArrayList<>(p.layers);
         Layer l = p.layers.remove(i);
         p.layers.add(j, l);
@@ -616,7 +659,8 @@ public class CanvasView extends View {
 
     public void mergeLayerDown(int i) {
         Page p = page();
-        if (i <= 0) return;
+        if (i <= 0 || i >= p.layers.size()) return;
+        clearSelection();
         ArrayList<Layer> before = new ArrayList<>(p.layers);
         Layer top = p.layers.get(i);
         Layer below = p.layers.get(i - 1).copy();
@@ -1205,9 +1249,11 @@ public class CanvasView extends View {
         if (doc == null || scene == null) return;
         // 손가락으로 톡 누르거나 가만히 있을 때는 흐린 캐시 대신 원래 화질로 그린다
         boolean moving = (gestureActive && (movedFar || pinching)) || !scroller.isFinished();
-        if (moving && !isInfinite() && sceneDirty && (pinching || lastRenderMs > 12)) {
-            drawFromPageCache(canvas);
-        } else {
+        boolean drawn = false;
+        if ((moving && !isInfinite() && sceneDirty && (pinching || lastRenderMs > 12)) || (debugForceCache && !isInfinite())) {
+            drawn = drawFromPageCache(canvas);
+        }
+        if (!drawn) {
             if (sceneDirty) {
                 renderScene();
                 if (!moving) scheduleSharpPdf();
@@ -1265,7 +1311,7 @@ public class CanvasView extends View {
     }
 
     /** 각 페이지를 낮은 해상도로 캐시해 두었다가 스크롤·확대 중에는 그대로 늘려 그린다 */
-    private void drawFromPageCache(Canvas canvas) {
+    private boolean drawFromPageCache(Canvas canvas) {
         canvas.drawRect(0, 0, getWidth(), getHeight(), deskPaint);
         float gTop = -ty / scale, gBot = (getHeight() - ty) / scale;
         float sh = 3 * density;
@@ -1281,10 +1327,13 @@ public class CanvasView extends View {
             if (b == null || b.isRecycled()) {
                 float cs = cacheScale(p);
                 try {
-                    b = Bitmap.createBitmap(Math.max(1, Math.round(p.w * cs)), Math.max(1, Math.round(p.h * cs)), Bitmap.Config.RGB_565);
+                    // 화면과 같은 색 깊이로 만든다 (예전의 16비트 캐시는 스크롤을 시작·멈출 때 색이 살짝 달라 보였음)
+                    b = Bitmap.createBitmap(Math.max(1, Math.round(p.w * cs)), Math.max(1, Math.round(p.h * cs)), Bitmap.Config.ARGB_8888);
                 } catch (OutOfMemoryError oom) {
-                    invalidateContent();
-                    return;
+                    // 메모리가 모자라면 캐시를 비우고 이번에는 화면에 직접 그린다
+                    for (Bitmap o : pageCache.values()) o.recycle();
+                    pageCache.clear();
+                    return false;
                 }
                 Canvas c = new Canvas(b);
                 c.scale(cs, cs);
@@ -1295,6 +1344,7 @@ public class CanvasView extends View {
             canvas.drawRect(sl + sh, st + sh, sl + p.w * scale + sh, st + p.h * scale + sh, shadowPaint);
             canvas.drawBitmap(b, null, new RectF(sl, st, sl + p.w * scale, st + p.h * scale), bitmapPaint);
         }
+        return true;
     }
 
     /** 일반 페이지 사이의 무한 캔버스 카드 (미리보기 + 안내) — 화면 좌표로 그림 */
@@ -1368,15 +1418,7 @@ public class CanvasView extends View {
                 for (Element e : selPreview) e.draw(canvas, rc);
             } else {
                 ensureSelBmp();
-                if (selBmp != null) {
-                    // 미리 그려 둔 그림을 옮기거나 늘려서 보여 준다
-                    float px = selBounds.left, py = selBounds.top;
-                    RectF d = new RectF((selBmpRect.left - px) * previewScale + px + previewDx,
-                            (selBmpRect.top - py) * previewScale + py + previewDy,
-                            (selBmpRect.right - px) * previewScale + px + previewDx,
-                            (selBmpRect.bottom - py) * previewScale + py + previewDy);
-                    canvas.drawBitmap(selBmp, null, d, bitmapPaint);
-                } else {
+                if (selBmp == null) {
                     canvas.save();
                     canvas.translate(previewDx, previewDy);
                     for (Element e : selection) e.draw(canvas, rc);
@@ -1385,6 +1427,23 @@ public class CanvasView extends View {
             }
         }
         canvas.restore();
+        if (!selection.isEmpty() && selBounds != null && selPreview == null && selBmp != null) {
+            // 미리 그려 둔 그림을 옮기거나 늘려서 보여 준다 (화면 좌표)
+            float px = selBounds.left, py = selBounds.top;
+            float l = sxOf((selBmpRect.left - px) * previewScale + px + previewDx);
+            float t = syOf((selBmpRect.top - py) * previewScale + py + previewDy);
+            float r = sxOf((selBmpRect.right - px) * previewScale + px + previewDx);
+            float b = syOf((selBmpRect.bottom - py) * previewScale + py + previewDy);
+            canvas.save();
+            if (!p.isInfinite()) canvas.clipRect(sxOf(0), syOf(0), sxOf(p.w), syOf(p.h));
+            if (selBmpExact && previewScale == 1f && selBmpScale == scale) {
+                // 같은 배율이면 픽셀에 딱 맞춰 그려 흐려지지 않게 한다
+                canvas.drawBitmap(selBmp, Math.round(l), Math.round(t), null);
+            } else {
+                canvas.drawBitmap(selBmp, null, new RectF(l, t, r, b), bitmapPaint);
+            }
+            canvas.restore();
+        }
 
         if (inputKind == IN_LASSO && !lassoPts.isEmpty() && lassoRect) {
             float[] a = lassoPts.get(0), b = lassoPts.get(lassoPts.size() - 1);
@@ -1435,12 +1494,25 @@ public class CanvasView extends View {
         RectF r = new RectF(selBounds);
         r.inset(-2, -2);
         if (r.width() <= 0 || r.height() <= 0) return;
-        float k = scale;
         float maxPx = Math.max(1f, getWidth()) * Math.max(1f, getHeight()) * 1.25f;
-        float area = r.width() * k * r.height() * k;
-        if (area > maxPx) k *= (float) Math.sqrt(maxPx / area);
-        k = Math.min(k, 4096f / Math.max(r.width(), r.height()));
-        int w = Math.max(1, (int) Math.ceil(r.width() * k)), h = Math.max(1, (int) Math.ceil(r.height() * k));
+        float area = r.width() * scale * r.height() * scale;
+        boolean exact = area <= maxPx && Math.max(r.width(), r.height()) * scale <= 4000f;
+        int w, h;
+        float sl = 0, st = 0;
+        if (exact) {
+            // 화면 픽셀 경계에 맞춘다: 화면에 직접 그린 것과 똑같이 보이도록
+            sl = (float) Math.floor(sxOf(r.left));
+            st = (float) Math.floor(syOf(r.top));
+            w = Math.max(1, (int) (Math.ceil(sxOf(r.right)) - sl));
+            h = Math.max(1, (int) (Math.ceil(syOf(r.bottom)) - st));
+            r = new RectF(wx(sl), wy(st), wx(sl + w), wy(st + h));
+        } else {
+            float k = scale;
+            if (area > maxPx) k *= (float) Math.sqrt(maxPx / area);
+            k = Math.min(k, 4000f / Math.max(r.width(), r.height()));
+            w = Math.max(1, (int) Math.ceil(r.width() * k));
+            h = Math.max(1, (int) Math.ceil(r.height() * k));
+        }
         try {
             selBmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
         } catch (OutOfMemoryError oom) {
@@ -1448,13 +1520,20 @@ public class CanvasView extends View {
             return;
         }
         Canvas c = new Canvas(selBmp);
-        c.scale(w / r.width(), h / r.height());
-        c.translate(-r.left, -r.top);
+        if (exact) {
+            c.translate(tx - sl, ty - st);
+            c.scale(scale, scale);
+            c.translate(ox(), oy());
+        } else {
+            c.scale(w / r.width(), h / r.height());
+            c.translate(-r.left, -r.top);
+        }
         for (int pass = 0; pass < 3; pass++) {
             for (Element e : selection) if (Renderer.passOf(e) == pass) e.draw(c, rc);
         }
         selBmpRect = r;
         selBmpScale = scale;
+        selBmpExact = exact;
     }
 
     private RectF screenSelBounds() {
@@ -1712,7 +1791,8 @@ public class CanvasView extends View {
         }
         lastSx = sx;
         lastSy = sy;
-        if (t != TOOL_LASSO && t != TOOL_TEXT && t != TOOL_ERASER) clearSelection();
+        // 지우개도 선택을 먼저 푼다: 선택된 것을 지우면 선택 상자에 이미 지워진 것이 남아, 옮길 때 되살아나거나 사라진다
+        if (t != TOOL_LASSO && t != TOOL_TEXT) clearSelection();
         switch (t) {
             case TOOL_PEN: {
                 inputKind = IN_STROKE;
@@ -1846,8 +1926,9 @@ public class CanvasView extends View {
                 break;
             }
             case IN_MOVE: {
-                previewDx = wx(sx) - dragStartX;
-                previewDy = wy(sy) - dragStartY;
+                // 화면 픽셀 단위로 옮긴다 (그려 둔 그림이 반 픽셀 어긋나 흐려지지 않게)
+                previewDx = Math.round((wx(sx) - dragStartX) * scale) / scale;
+                previewDy = Math.round((wy(sy) - dragStartY) * scale) / scale;
                 previewScale = 1f;
                 selPreview = null; // 미리 그려 둔 그림을 옮겨서 보여 준다 (획을 매번 다시 만들지 않음)
                 invalidate();
@@ -2195,7 +2276,8 @@ public class CanvasView extends View {
 
     private void toggleTape(TapeElem t) {
         t.revealed = !t.revealed;
-        invalidateScene();
+        if (selection.contains(t)) dropSelBmp();
+        markDirty(t.bounds(), true); // 테이프가 있는 자리만 다시 그린다
     }
 
     /** 페이지의 모든 테이프 한꺼번에 가리기/보이기 */

@@ -56,7 +56,7 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
     private PagePanel pagePanel;
     private boolean dirty;
     /** 자동 저장 뒤 표지 미리보기를 아직 새로 만들지 않았음 */
-    private boolean thumbStale = true;
+    private boolean thumbStale;
 
     private final TextView[] toolBtns = new TextView[9];
     private TextView attachBtn, detachBtn, memoPatBtn, homeBtn;

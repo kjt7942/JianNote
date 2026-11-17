@@ -39,6 +39,13 @@ public class Renderer {
             c.save();
             c.clipRect(0, 0, p.w, p.h);
         }
+        // 일부만 다시 그릴 때 가장자리에 걸친 요소를 빼먹지 않도록 여유를 두고 고른다 (부드러운 가장자리·테두리 굵기)
+        RectF cull = null;
+        if (vis != null) {
+            cull = new RectF(vis);
+            float m = 2f + 2f / Math.max(scale, 0.01f);
+            cull.inset(-m, -m);
+        }
         // 그리는 순서: 0) 이미지·메모지  1) 형광펜(글씨 뒤)  2) 나머지(글씨·펜·테이프 등)
         for (int pass = 0; pass < 3; pass++) {
             for (Layer l : p.layers) {
@@ -47,7 +54,7 @@ public class Renderer {
                 for (Element e : l.elems) {
                     if (passOf(e) != pass) continue;
                     if (excluded != null && excluded.contains(e)) continue;
-                    if (vis != null && !RectF.intersects(vis, e.bounds())) continue;
+                    if (cull != null && !RectF.intersects(cull, e.bounds())) continue;
                     if (save < 0 && l.alpha < 255) save = c.saveLayerAlpha(vis, l.alpha);
                     e.draw(c, rc);
                 }
