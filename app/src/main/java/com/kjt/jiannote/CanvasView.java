@@ -157,7 +157,7 @@ public class CanvasView extends View {
     private final java.util.LinkedHashMap<Page, Bitmap> pageCache = new java.util.LinkedHashMap<Page, Bitmap>(8, 0.75f, true) {
         @Override
         protected boolean removeEldestEntry(java.util.Map.Entry<Page, Bitmap> e) {
-            if (size() > 6) {
+            if (size() > 4) {
                 e.getValue().recycle();
                 return true;
             }
@@ -474,7 +474,11 @@ public class CanvasView extends View {
     }
 
     private static float cacheScale(Page p) {
-        return Math.min(1.6f, 1500f / Math.max(1f, p.w));
+        float cs = Math.min(1.6f, 1500f / Math.max(1f, p.w));
+        // 아주 길거나 큰 페이지는 그림 크기가 지나치게 커지지 않게 (약 400만 픽셀까지)
+        double px = (double) p.w * cs * p.h * cs;
+        if (px > 4.0e6) cs *= (float) Math.sqrt(4.0e6 / px);
+        return cs;
     }
 
     /**
@@ -1241,9 +1245,11 @@ public class CanvasView extends View {
         if (doc == null || scene == null) return;
         // 손가락으로 톡 누르거나 가만히 있을 때는 흐린 캐시 대신 원래 화질로 그린다
         boolean moving = (gestureActive && (movedFar || pinching)) || !scroller.isFinished();
+        boolean drawn = false;
         if ((moving && !isInfinite() && sceneDirty && (pinching || lastRenderMs > 12)) || (debugForceCache && !isInfinite())) {
-            drawFromPageCache(canvas);
-        } else {
+            drawn = drawFromPageCache(canvas);
+        }
+        if (!drawn) {
             if (sceneDirty) {
                 renderScene();
                 if (!moving) scheduleSharpPdf();
@@ -1301,7 +1307,7 @@ public class CanvasView extends View {
     }
 
     /** 각 페이지를 낮은 해상도로 캐시해 두었다가 스크롤·확대 중에는 그대로 늘려 그린다 */
-    private void drawFromPageCache(Canvas canvas) {
+    private boolean drawFromPageCache(Canvas canvas) {
         canvas.drawRect(0, 0, getWidth(), getHeight(), deskPaint);
         float gTop = -ty / scale, gBot = (getHeight() - ty) / scale;
         float sh = 3 * density;
@@ -1317,10 +1323,13 @@ public class CanvasView extends View {
             if (b == null || b.isRecycled()) {
                 float cs = cacheScale(p);
                 try {
-                    b = Bitmap.createBitmap(Math.max(1, Math.round(p.w * cs)), Math.max(1, Math.round(p.h * cs)), Bitmap.Config.RGB_565);
+                    // 화면과 같은 색 깊이로 만든다 (예전의 16비트 캐시는 스크롤을 시작·멈출 때 색이 살짝 달라 보였음)
+                    b = Bitmap.createBitmap(Math.max(1, Math.round(p.w * cs)), Math.max(1, Math.round(p.h * cs)), Bitmap.Config.ARGB_8888);
                 } catch (OutOfMemoryError oom) {
-                    invalidateContent();
-                    return;
+                    // 메모리가 모자라면 캐시를 비우고 이번에는 화면에 직접 그린다
+                    for (Bitmap o : pageCache.values()) o.recycle();
+                    pageCache.clear();
+                    return false;
                 }
                 Canvas c = new Canvas(b);
                 c.scale(cs, cs);
@@ -1331,6 +1340,7 @@ public class CanvasView extends View {
             canvas.drawRect(sl + sh, st + sh, sl + p.w * scale + sh, st + p.h * scale + sh, shadowPaint);
             canvas.drawBitmap(b, null, new RectF(sl, st, sl + p.w * scale, st + p.h * scale), bitmapPaint);
         }
+        return true;
     }
 
     /** 일반 페이지 사이의 무한 캔버스 카드 (미리보기 + 안내) — 화면 좌표로 그림 */
