@@ -6,6 +6,9 @@ on:
     branches: [ 'dev/**' ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -35,12 +38,15 @@ jobs:
           set -o pipefail
           gradle assembleRelease --no-daemon 2>&1 | tail -30
 
-      - uses: actions/upload-artifact@v4
+      # 점검에서 만든 그림을 ci-artifacts 가지에 올려 확인할 수 있게 한다 (매번 덮어씀)
+      - name: Publish test images
         if: always()
-        with:
-          name: test-artifacts
-          path: |
-            app/build/test-artifacts
-            app/build/reports/tests
-            test.log
-          retention-days: 3
+        shell: bash
+        run: |
+          mkdir -p out && cp -r app/build/test-artifacts/. out/ 2>/dev/null || true
+          grep -E "\[점검\]|PASSED|FAILED|tests completed|BUILD|AssertionError|Exception" test.log | grep -v "^\s*at " > out/summary.txt || true
+          cd out
+          git init -q -b ci-artifacts
+          git config user.name ci && git config user.email ci@example.invalid
+          git add -A && git commit -qm "test artifacts ${{ github.sha }}" || true
+          git push -q -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" ci-artifacts
