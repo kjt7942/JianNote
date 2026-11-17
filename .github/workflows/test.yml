@@ -1,0 +1,46 @@
+name: Test
+
+# dev/ 로 시작하는 가지에 올리면 자동 점검만 돌린다 (앱 배포는 main 에서만)
+on:
+  push:
+    branches: [ 'dev/**' ]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Run tests
+        shell: bash
+        run: |
+          set -o pipefail
+          gradle testDebugUnitTest --no-daemon 2>&1 | tee test.log
+
+      - name: Compile release (R8)
+        if: success()
+        shell: bash
+        run: |
+          set -o pipefail
+          gradle assembleRelease --no-daemon 2>&1 | tail -30
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-artifacts
+          path: |
+            app/build/test-artifacts
+            app/build/reports/tests
+            test.log
+          retention-days: 3

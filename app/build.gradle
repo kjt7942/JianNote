@@ -50,7 +50,26 @@ android {
         abortOnError false
         checkReleaseBuilds false
     }
+
+    // 자동 점검(단위 테스트): 실제 안드로이드 그리기 코드로 캔버스를 돌려 본다. 앱 자체에는 포함되지 않음
+    testOptions {
+        unitTests {
+            includeAndroidResources = true
+            all {
+                maxHeapSize = '3g'
+                systemProperty 'artifacts.dir', "${buildDir}/test-artifacts"
+                systemProperty 'robolectric.logging', 'stdout'
+                testLogging {
+                    events 'passed', 'failed', 'skipped'
+                    exceptionFormat 'full'
+                    showStandardStreams = true
+                }
+            }
+        }
+    }
 }
 
 dependencies {
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.robolectric:robolectric:4.16'
 }
