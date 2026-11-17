@@ -137,8 +137,43 @@ public class StrokeElem extends Element {
             for (int i = built; i < n; i++) {
                 float x = pts[3 * i], y = pts[3 * i + 1], r = Math.max(pts[3 * i + 2] / 2f, 0.35f);
                 boolean endpoint = i == 0 || i == n - 1;
+                // 점마다 원을 넣으면 획이 많은 페이지를 그리는 데 오래 걸린다.
+                // 거의 곧게 이어지는 점은 원을 빼고, 조금 꺾이는 점은 작은 삼각형으로 틈만 메운다.
+                int join = 2; // 0 = 없음, 1 = 삼각형, 2 = 원
+                if (!endpoint) {
+                    float ax = x - pts[3 * (i - 1)], ay = y - pts[3 * (i - 1) + 1];
+                    float bx = pts[3 * (i + 1)] - x, by = pts[3 * (i + 1) + 1] - y;
+                    float la = (float) Math.hypot(ax, ay), lb = (float) Math.hypot(bx, by);
+                    if (la > 0.01f && lb > 0.01f) {
+                        float cos = (ax * bx + ay * by) / (la * lb);
+                        if (cos > 0.5f) {
+                            float cross = (ax * by - ay * bx) / (la * lb);
+                            float err = r * (1f - (float) Math.sqrt((1f + cos) / 2f)); // 원 대신 삼각형을 썼을 때 모자라는 두께
+                            if (r * Math.abs(cross) < 0.012f) {
+                                join = 0;
+                            } else if (err < 0.06f) {
+                                join = 1;
+                                // 앞 구간과 뒤 구간의 옆 방향(법선)
+                                float n1x = -ay / la * r, n1y = ax / la * r, n2x = -by / lb * r, n2y = bx / lb * r;
+                                if (cross > 0) { // 사각형·원과 같은 방향으로 돌게 순서를 맞춘다 (방향이 다르면 겹친 곳이 비어 보임)
+                                    float tx = n1x, ty = n1y;
+                                    n1x = n2x; n1y = n2y;
+                                    n2x = tx; n2y = ty;
+                                }
+                                path.moveTo(x, y);
+                                path.lineTo(x + n1x, y + n1y);
+                                path.lineTo(x + n2x, y + n2y);
+                                path.close();
+                                path.moveTo(x, y);
+                                path.lineTo(x - n1x, y - n1y);
+                                path.lineTo(x - n2x, y - n2y);
+                                path.close();
+                            }
+                        }
+                    }
+                }
                 // 네모 끝: 양 끝점에는 둥근 마개를 그리지 않음 (완성된 획에서만 판단 가능)
-                if (!square || !endpoint || n == 1) {
+                if (join == 2 && (!square || !endpoint || n == 1)) {
                     if (square && n == 1) path.addRect(x - r, y - r, x + r, y + r, Path.Direction.CCW);
                     else path.addCircle(x, y, r, Path.Direction.CCW);
                 }

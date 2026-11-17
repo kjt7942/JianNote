@@ -143,13 +143,18 @@ public class PagePanel extends FrameLayout {
         thumbs.remove(p);
         if (isOpen()) {
             handler.removeCallbacks(refreshCurrent);
-            handler.postDelayed(refreshCurrent, 700);
+            handler.postDelayed(refreshCurrent, 1500);
         }
     }
 
     private final Runnable refreshCurrent = this::refreshCurrentThumb;
 
     private void refreshCurrentThumb() {
+        if (canvas.isBusy()) { // 쓰는 중에는 미리보기를 다시 그리지 않는다 (페이지를 통째로 그려야 해서 펜이 끊김)
+            handler.removeCallbacks(refreshCurrent);
+            handler.postDelayed(refreshCurrent, 800);
+            return;
+        }
         int i = canvas.pageIndex();
         Page p = canvas.page();
         FrameLayout card = cards.get(i);

@@ -172,6 +172,15 @@ public class CanvasView extends View {
     private Bitmap scene;
     private boolean sceneDirty = true;
     private float sceneScale = 1f, sceneTx = 0f, sceneTy = 0f;
+    /** 장면 전체가 아니라 일부만 다시 그리면 될 때의 화면 영역 */
+    private RectF dirtyRect;
+    /** 마지막으로 전체를 그린 뒤 내용은 그대로이고 화면 위치만 바뀌었는지 (그러면 그림을 밀어서 다시 쓸 수 있음) */
+    private boolean sceneContentOk;
+    private Bitmap sceneAlt;
+    /** 선택한 내용을 한 번 그려 둔 그림 (옮기거나 화면을 다시 그릴 때마다 획을 전부 다시 그리지 않도록) */
+    private Bitmap selBmp;
+    private RectF selBmpRect;
+    private float selBmpScale;
     private long lastRenderMs = 0;
     private final Matrix tmpMatrix = new Matrix();
     private final Paint bitmapPaint = new Paint(Paint.FILTER_BITMAP_FLAG);
@@ -424,6 +433,9 @@ public class CanvasView extends View {
     }
 
     public void invalidateScene() {
+        dropSelBmp();
+        dirtyRect = null;
+        sceneContentOk = false;
         for (Bitmap b : pageCache.values()) b.recycle();
         pageCache.clear();
         if (viewInfinite) {
@@ -441,6 +453,75 @@ public class CanvasView extends View {
     private void dropPageCache(Page p) {
         Bitmap b = pageCache.remove(p);
         if (b != null) b.recycle();
+    }
+
+    private void dropSelBmp() {
+        if (selBmp != null) {
+            selBmp.recycle();
+            selBmp = null;
+        }
+    }
+
+    private static RectF union(RectF a, RectF b) {
+        if (b == null) return a;
+        if (a == null) return new RectF(b);
+        a.union(b);
+        return a;
+    }
+
+    private static float cacheScale(Page p) {
+        return Math.min(1.6f, 1500f / Math.max(1f, p.w));
+    }
+
+    /**
+     * 현재 페이지의 일부(페이지 좌표)만 다시 그리도록 표시한다.
+     * 획이 많은 페이지에서 지우개·선택·형광펜을 쓸 때마다 화면 전체를 다시 그리면 매우 느려지기 때문.
+     * content = true 이면 내용이 바뀐 것이므로 스크롤용 캐시도 그 부분만 고친다.
+     */
+    private void markDirty(RectF r, boolean content) {
+        if (r == null || doc == null) return;
+        if (content) refreshCaches(r);
+        if (scene == null || sceneDirty || sceneScale != scale || sceneTx != tx || sceneTy != ty) {
+            sceneDirty = true;
+            sceneContentOk = false;
+        } else {
+            float pad = 3;
+            RectF s = new RectF(sxOf(r.left) - pad, syOf(r.top) - pad, sxOf(r.right) + pad, syOf(r.bottom) + pad);
+            dirtyRect = union(dirtyRect, s);
+        }
+        invalidate();
+    }
+
+    /** 스크롤용 페이지 캐시에서 바뀐 부분만 다시 그린다 (캐시를 통째로 버리면 다음 스크롤이 끊김) */
+    private void refreshCaches(RectF r) {
+        Page p = page();
+        if (viewInfinite) {
+            Bitmap t = infThumbs.remove(p);
+            if (t != null) t.recycle();
+        }
+        if (p.isInfinite()) return;
+        Bitmap b = pageCache.get(p);
+        if (b == null || b.isRecycled()) return;
+        float cs = cacheScale(p);
+        int l = Math.max(0, (int) Math.floor(r.left * cs) - 2), t = Math.max(0, (int) Math.floor(r.top * cs) - 2);
+        int rr = Math.min(b.getWidth(), (int) Math.ceil(r.right * cs) + 2), bb = Math.min(b.getHeight(), (int) Math.ceil(r.bottom * cs) + 2);
+        if (rr <= l || bb <= t) return;
+        Canvas c = new Canvas(b);
+        c.clipRect(l, t, rr, bb);
+        c.scale(cs, cs);
+        Renderer.drawPage(c, p, paperColor, rc, new RectF(l / cs, t / cs, rr / cs, bb / cs), cs, null);
+    }
+
+    private void notifyChanged() {
+        if (listener != null) {
+            listener.onHistoryChanged();
+            listener.onDocChanged();
+        }
+    }
+
+    /** 입력(필기·지우기·끌기) 중인지 — 자동 저장을 잠시 미루는 데 쓴다 */
+    public boolean isBusy() {
+        return mode != M_NONE || inputKind != IN_NONE || !scroller.isFinished();
     }
 
     public void fitPage() {
@@ -487,10 +568,7 @@ public class CanvasView extends View {
 
     private void changed() {
         invalidateScene();
-        if (listener != null) {
-            listener.onHistoryChanged();
-            listener.onDocChanged();
-        }
+        notifyChanged();
     }
 
     private void pushElems(Layer l, ArrayList<Element> before) {
@@ -657,15 +735,29 @@ public class CanvasView extends View {
 
     public void clearSelection() {
         if (selection.isEmpty() && excluded.isEmpty()) return;
+        RectF d = null;
+        for (Element e : excluded) d = union(d, e.bounds());
         selection.clear();
         excluded.clear();
         selPreview = null;
         selBounds = null;
-        invalidateScene();
+        dropSelBmp();
+        previewDx = previewDy = 0;
+        previewScale = 1f;
+        markDirty(d, false); // 선택했던 부분만 장면에 다시 그려 넣는다
+        invalidate();
         if (listener != null) listener.onSelectionChanged(false);
     }
 
     private void select(java.util.List<Element> list) {
+        select(list, true);
+    }
+
+    /** redraw = false: 이미 장면에서 빠져 있던 항목을 바꿔 끼우는 경우(이동·색 변경 등)라 장면을 다시 그릴 필요가 없음 */
+    private void select(java.util.List<Element> list, boolean redraw) {
+        HashSet<Element> oldEx = new HashSet<>(excluded);
+        int asked = list.size();
+        dropSelBmp();
         selection.clear();
         excluded.clear();
         selection.addAll(list);
@@ -680,7 +772,14 @@ public class CanvasView extends View {
         list = new ArrayList<>(selection);
         excluded.addAll(list);
         updateSelBounds();
-        invalidateScene();
+        if (redraw || selection.size() != asked) {
+            // 선택 상태가 바뀐 항목이 있는 부분만 다시 그린다
+            RectF d = null;
+            for (Element e : oldEx) if (!excluded.contains(e)) d = union(d, e.bounds());
+            for (Element e : excluded) if (!oldEx.contains(e)) d = union(d, e.bounds());
+            markDirty(d, false);
+        }
+        invalidate();
         if (listener != null) listener.onSelectionChanged(!selection.isEmpty());
     }
 
@@ -697,13 +796,21 @@ public class CanvasView extends View {
         if (selection.isEmpty()) return;
         Layer l = activeLayer();
         ArrayList<Element> before = new ArrayList<>(l.elems);
-        l.elems.removeAll(selection);
+        HashSet<Element> gone = new HashSet<>(selection);
+        ArrayList<Element> keep = new ArrayList<>(l.elems.size());
+        for (Element e : l.elems) if (!gone.contains(e)) keep.add(e);
+        l.elems = keep;
         pushElems(l, before);
+        RectF d = selBounds == null ? null : new RectF(selBounds);
         selection.clear();
         excluded.clear();
         selBounds = null;
+        dropSelBmp();
         if (listener != null) listener.onSelectionChanged(false);
-        changed();
+        // 선택 항목은 이미 장면에서 빠져 있으므로 스크롤용 캐시만 고치면 된다
+        if (d != null) refreshCaches(d);
+        invalidate();
+        notifyChanged();
         if (listener != null) listener.onSelectionEdited();
     }
 
@@ -852,6 +959,7 @@ public class CanvasView extends View {
         selection.clear();
         excluded.clear();
         selBounds = null;
+        dropSelBmp();
         if (listener != null) listener.onSelectionChanged(false);
         changed();
         if (listener != null) listener.onSelectionEdited();
@@ -892,9 +1000,10 @@ public class CanvasView extends View {
         }
         l.elems.addAll(copies);
         pushElems(l, before);
-        changed();
         select(copies);
-        if (listener != null) listener.onSelectionEdited();
+        if (selBounds != null) refreshCaches(selBounds);
+        notifyChanged();
+        // 복제본은 선택된 채로 둔다: 바로 끌어서 원하는 곳으로 옮길 수 있게 (여기서 편집 끝으로 치면 선택이 풀려 원본과 겹친 채 남는다)
     }
 
     public void recolorSelection(int color) {
@@ -929,19 +1038,25 @@ public class CanvasView extends View {
         Layer l = activeLayer();
         ArrayList<Element> before = new ArrayList<>(l.elems);
         ArrayList<Element> newSel = new ArrayList<>();
+        java.util.IdentityHashMap<Element, Integer> pos = new java.util.IdentityHashMap<>();
+        for (int i = 0; i < l.elems.size(); i++) pos.put(l.elems.get(i), i);
+        RectF d = selBounds == null ? null : new RectF(selBounds);
         for (Element e : selection) {
-            int idx = l.elems.indexOf(e);
+            Integer idx = pos.get(e);
             Element ne = fn.apply(e);
             if (ne != e) {
                 ne.group = e.group;
                 ne.locked = e.locked;
             }
-            if (idx >= 0) l.elems.set(idx, ne);
+            if (idx != null) l.elems.set(idx, ne);
             newSel.add(ne);
         }
         pushElems(l, before);
-        changed();
-        select(newSel);
+        select(newSel, false);
+        d = union(d, selBounds);
+        if (d != null) refreshCaches(d);
+        invalidate();
+        notifyChanged();
         if (listener != null) listener.onSelectionEdited();
     }
 
@@ -966,27 +1081,45 @@ public class CanvasView extends View {
         super.onSizeChanged(w, h, ow, oh);
         if (w <= 0 || h <= 0) return;
         if (scene != null) scene.recycle();
+        if (sceneAlt != null) sceneAlt.recycle();
+        sceneAlt = null;
+        sceneContentOk = false;
         scene = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
         if (doc != null && (ow == 0 || !isInfinite())) fitPage();
         sceneDirty = true;
     }
 
     private void renderScene() {
+        renderScene(null);
+    }
+
+    /** part = null 이면 화면 전체, 아니면 그 화면 영역만 다시 그린다 */
+    private void renderScene(RectF part) {
         if (scene == null || doc == null) return;
+        if (part == null && shiftScene()) return;
         long t0 = SystemClock.uptimeMillis();
         Canvas c = new Canvas(scene);
         int W = scene.getWidth(), H = scene.getHeight();
+        float cl = 0, ct = 0, cr = W, cb = H;
+        if (part != null) {
+            cl = Math.max(0, (float) Math.floor(part.left));
+            ct = Math.max(0, (float) Math.floor(part.top));
+            cr = Math.min(W, (float) Math.ceil(part.right));
+            cb = Math.min(H, (float) Math.ceil(part.bottom));
+            if (cr <= cl || cb <= ct) return;
+            c.clipRect(cl, ct, cr, cb);
+        }
         c.drawRect(0, 0, W, H, deskPaint);
         if (isInfinite()) {
             c.save();
             c.translate(tx, ty);
             c.scale(scale, scale);
-            RectF vis = new RectF(-tx / scale, -ty / scale, (W - tx) / scale, (H - ty) / scale);
+            RectF vis = new RectF((cl - tx) / scale, (ct - ty) / scale, (cr - tx) / scale, (cb - ty) / scale);
             Renderer.drawPage(c, page(), paperColor, rc, vis, scale, excluded);
             c.restore();
         } else {
-            float gTop = -ty / scale, gBot = (H - ty) / scale;
-            float gLeft = -tx / scale, gRight = (W - tx) / scale;
+            float gTop = (ct - ty) / scale, gBot = (cb - ty) / scale;
+            float gLeft = (cl - tx) / scale, gRight = (cr - tx) / scale;
             float sh = 3 * density;
             for (int i = 0; i < doc.pages.size(); i++) {
                 Page p = doc.pages.get(i);
@@ -1007,11 +1140,64 @@ public class CanvasView extends View {
                 c.restore();
             }
         }
+        if (part != null) return;
         sceneScale = scale;
         sceneTx = tx;
         sceneTy = ty;
         sceneDirty = false;
+        dirtyRect = null;
+        sceneContentOk = true;
         lastRenderMs = SystemClock.uptimeMillis() - t0;
+    }
+
+    /**
+     * 내용은 그대로이고 같은 배율에서 화면만 조금 움직였으면, 이전 그림을 그만큼 밀어서 다시 쓰고
+     * 새로 드러난 가장자리 띠만 그린다 (스크롤이 멈출 때마다 화면 전체를 다시 그리지 않도록).
+     */
+    private boolean shiftScene() {
+        if (!sceneContentOk || dirtyRect != null || sceneScale != scale) return false;
+        float fx = tx - sceneTx, fy = ty - sceneTy;
+        int dx = Math.round(fx), dy = Math.round(fy);
+        if (Math.abs(fx - dx) > 0.01f || Math.abs(fy - dy) > 0.01f) return false; // 정수 픽셀만큼 움직였을 때만 그대로 쓸 수 있다
+        if (dx == 0 && dy == 0) return false;
+        int W = scene.getWidth(), H = scene.getHeight();
+        if (Math.abs(dx) > W * 0.85f || Math.abs(dy) > H * 0.85f) return false;
+        if (sceneAlt == null || sceneAlt.isRecycled() || sceneAlt.getWidth() != W || sceneAlt.getHeight() != H) {
+            try {
+                sceneAlt = Bitmap.createBitmap(W, H, Bitmap.Config.ARGB_8888);
+            } catch (OutOfMemoryError oom) {
+                sceneAlt = null;
+                return false;
+            }
+        }
+        new Canvas(sceneAlt).drawBitmap(scene, dx, dy, null);
+        Bitmap t = scene;
+        scene = sceneAlt;
+        sceneAlt = t;
+        sceneScale = scale;
+        sceneTx = tx;
+        sceneTy = ty;
+        sceneDirty = false;
+        if (dy > 0) renderScene(new RectF(0, 0, W, dy));
+        else if (dy < 0) renderScene(new RectF(0, H + dy, W, H));
+        if (dx > 0) renderScene(new RectF(0, 0, dx, H));
+        else if (dx < 0) renderScene(new RectF(W + dx, 0, W, H));
+        return true;
+    }
+
+    /** 장면 그림을 최신 상태로 (전체 또는 바뀐 부분만) */
+    private void ensureScene() {
+        if (dirtyRect != null && (sceneScale != scale || sceneTx != tx || sceneTy != ty)) {
+            sceneDirty = true;
+            sceneContentOk = false;
+        }
+        if (sceneDirty) {
+            renderScene(null);
+        } else if (dirtyRect != null) {
+            RectF d = dirtyRect;
+            dirtyRect = null;
+            renderScene(d);
+        }
     }
 
     @Override
@@ -1025,6 +1211,8 @@ public class CanvasView extends View {
             if (sceneDirty) {
                 renderScene();
                 if (!moving) scheduleSharpPdf();
+            } else if (dirtyRect != null) {
+                ensureScene();
             }
             drawScene(canvas);
         }
@@ -1062,6 +1250,7 @@ public class CanvasView extends View {
         // 화면 크기의 약 2배까지만 (보이는 영역 + 주변 여유)
         long budget = (long) getWidth() * getHeight() * 2;
         pdfBg.request(pages, vis, origin, scale, budget, () -> {
+            sceneContentOk = false;
             sceneDirty = true;
             invalidate();
         });
@@ -1090,7 +1279,7 @@ public class CanvasView extends View {
             }
             Bitmap b = pageCache.get(p);
             if (b == null || b.isRecycled()) {
-                float cs = Math.min(1.6f, 1500f / Math.max(1f, p.w));
+                float cs = cacheScale(p);
                 try {
                     b = Bitmap.createBitmap(Math.max(1, Math.round(p.w * cs)), Math.max(1, Math.round(p.h * cs)), Bitmap.Config.RGB_565);
                 } catch (OutOfMemoryError oom) {
@@ -1174,9 +1363,26 @@ public class CanvasView extends View {
         if (!p.isInfinite()) canvas.clipRect(0, 0, p.w, p.h);
         if (current != null) current.draw(canvas, rc);
         if (previewElem != null) previewElem.draw(canvas, rc);
-        if (!selection.isEmpty()) {
-            ArrayList<Element> list = selPreview != null ? selPreview : selection;
-            for (Element e : list) e.draw(canvas, rc);
+        if (!selection.isEmpty() && selBounds != null) {
+            if (selPreview != null) {
+                for (Element e : selPreview) e.draw(canvas, rc);
+            } else {
+                ensureSelBmp();
+                if (selBmp != null) {
+                    // 미리 그려 둔 그림을 옮기거나 늘려서 보여 준다
+                    float px = selBounds.left, py = selBounds.top;
+                    RectF d = new RectF((selBmpRect.left - px) * previewScale + px + previewDx,
+                            (selBmpRect.top - py) * previewScale + py + previewDy,
+                            (selBmpRect.right - px) * previewScale + px + previewDx,
+                            (selBmpRect.bottom - py) * previewScale + py + previewDy);
+                    canvas.drawBitmap(selBmp, null, d, bitmapPaint);
+                } else {
+                    canvas.save();
+                    canvas.translate(previewDx, previewDy);
+                    for (Element e : selection) e.draw(canvas, rc);
+                    canvas.restore();
+                }
+            }
         }
         canvas.restore();
 
@@ -1217,9 +1423,43 @@ public class CanvasView extends View {
         return Math.min(18 * density, Math.max(11 * density, small * 0.25f));
     }
 
+    /** 선택한 내용을 한 번만 그려 둔다. 확대 배율이 바뀌면(움직임이 멈춘 뒤) 다시 그린다 */
+    private void ensureSelBmp() {
+        if (selection.isEmpty() || selBounds == null) {
+            dropSelBmp();
+            return;
+        }
+        boolean moving = gestureActive || !scroller.isFinished();
+        if (selBmp != null && (selBmpScale == scale || moving)) return;
+        dropSelBmp();
+        RectF r = new RectF(selBounds);
+        r.inset(-2, -2);
+        if (r.width() <= 0 || r.height() <= 0) return;
+        float k = scale;
+        float maxPx = Math.max(1f, getWidth()) * Math.max(1f, getHeight()) * 1.25f;
+        float area = r.width() * k * r.height() * k;
+        if (area > maxPx) k *= (float) Math.sqrt(maxPx / area);
+        k = Math.min(k, 4096f / Math.max(r.width(), r.height()));
+        int w = Math.max(1, (int) Math.ceil(r.width() * k)), h = Math.max(1, (int) Math.ceil(r.height() * k));
+        try {
+            selBmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+        } catch (OutOfMemoryError oom) {
+            selBmp = null;
+            return;
+        }
+        Canvas c = new Canvas(selBmp);
+        c.scale(w / r.width(), h / r.height());
+        c.translate(-r.left, -r.top);
+        for (int pass = 0; pass < 3; pass++) {
+            for (Element e : selection) if (Renderer.passOf(e) == pass) e.draw(c, rc);
+        }
+        selBmpRect = r;
+        selBmpScale = scale;
+    }
+
     private RectF screenSelBounds() {
         RectF b = new RectF(selBounds);
-        if (selPreview != null) {
+        if (inputKind == IN_MOVE || inputKind == IN_SCALE) {
             b.left = selBounds.left + previewDx;
             b.top = selBounds.top + previewDy;
             b.right = (selBounds.right - selBounds.left) * previewScale + selBounds.left + previewDx;
@@ -1609,7 +1849,7 @@ public class CanvasView extends View {
                 previewDx = wx(sx) - dragStartX;
                 previewDy = wy(sy) - dragStartY;
                 previewScale = 1f;
-                buildPreview();
+                selPreview = null; // 미리 그려 둔 그림을 옮겨서 보여 준다 (획을 매번 다시 만들지 않음)
                 invalidate();
                 break;
             }
@@ -1620,7 +1860,8 @@ public class CanvasView extends View {
                 previewScale = Math.max(0.1f, d0 < 1 ? 1 : d1 / d0);
                 previewDx = 0;
                 previewDy = 0;
-                buildPreview();
+                if (selection.size() <= 120) buildPreview(); // 적을 때만 정확한 미리보기, 많으면 그림을 늘려서 보여 줌
+                else selPreview = null;
                 invalidate();
                 break;
             }
@@ -1689,7 +1930,7 @@ public class CanvasView extends View {
                 if (eraseChanged) pushElems(activeLayer(), eraseBefore);
                 eraseBefore = null;
                 if (!drawIsStylus || tool != TOOL_ERASER) eraserSx = -1;
-                if (eraseChanged) changed();
+                if (eraseChanged) notifyChanged(); // 화면은 지우는 동안 이미 바뀐 부분만 고쳐 그렸다
                 break;
             }
             case IN_LASSO: {
@@ -1699,11 +1940,28 @@ public class CanvasView extends View {
             }
             case IN_MOVE:
             case IN_SCALE: {
-                if (selPreview != null && (previewDx != 0 || previewDy != 0 || previewScale != 1f)) {
+                if (selBounds != null && (previewDx != 0 || previewDy != 0 || previewScale != 1f)) {
                     final float dx = previewDx, dy = previewDy, s = previewScale;
                     final float px = selBounds.left, py = selBounds.top;
                     selPreview = null;
+                    // 옮기기만 했으면 그려 둔 그림을 그대로 다시 쓴다
+                    Bitmap keep = s == 1f ? selBmp : null;
+                    RectF keepRect = selBmpRect;
+                    float keepScale = selBmpScale;
+                    if (keep != null) selBmp = null;
+                    previewDx = previewDy = 0;
+                    previewScale = 1f;
                     replaceSelection(el -> el.transformedKeepWidth(dx, dy, s, px, py));
+                    if (keep != null) {
+                        if (!selection.isEmpty() && selBmp == null) {
+                            selBmp = keep;
+                            selBmpRect = new RectF(keepRect);
+                            selBmpRect.offset(dx, dy);
+                            selBmpScale = keepScale;
+                        } else {
+                            keep.recycle();
+                        }
+                    }
                 }
                 selPreview = null;
                 previewDx = previewDy = 0;
@@ -1771,6 +2029,8 @@ public class CanvasView extends View {
         }
         current = null;
         selPreview = null;
+        previewDx = previewDy = 0;
+        previewScale = 1f;
         lassoPts.clear();
         inputKind = IN_NONE;
         invalidate();
@@ -1786,6 +2046,9 @@ public class CanvasView extends View {
         for (int i = activeLayer + 1; i < p.layers.size(); i++) {
             if (p.layers.get(i).visible && !p.layers.get(i).elems.isEmpty()) top = false;
         }
+        // 글씨 뒤로 들어가는 형광펜·이미지·메모지는 그 부분만 순서대로 다시 그린다
+        if (Renderer.passOf(el) != 2) top = false;
+        refreshCaches(el.bounds());
         if (top && l.alpha == 255 && l.visible && !sceneDirty && scene != null
                 && sceneScale == scale && sceneTx == tx && sceneTy == ty) {
             Canvas c = new Canvas(scene);
@@ -1795,13 +2058,10 @@ public class CanvasView extends View {
             if (!p.isInfinite()) c.clipRect(0, 0, p.w, p.h);
             el.draw(c, rc);
         } else {
-            sceneDirty = true;
+            markDirty(el.bounds(), false);
         }
         invalidate();
-        if (listener != null) {
-            listener.onHistoryChanged();
-            listener.onDocChanged();
-        }
+        notifyChanged();
     }
 
     private void scheduleHold() {
@@ -2005,7 +2265,7 @@ public class CanvasView extends View {
     private void pickColor(float sx, float sy) {
         eyedropper = false;
         if (scene == null) return;
-        if (sceneDirty) renderScene();
+        ensureScene();
         int x = Math.max(0, Math.min(scene.getWidth() - 1, Math.round(sx)));
         int y = Math.max(0, Math.min(scene.getHeight() - 1, Math.round(sy)));
         int c = scene.getPixel(x, y) | 0xFF000000;
@@ -2030,11 +2290,15 @@ public class CanvasView extends View {
         float r = eraserSize / 2f / scale;
         Layer l = activeLayer();
         ArrayList<Element> out = null;
+        RectF hitB = null;
+        RectF probe = new RectF(x - r, y - r, x + r, y + r);
         for (int i = 0; i < l.elems.size(); i++) {
             Element e = l.elems.get(i);
             boolean hit;
             ArrayList<StrokeElem> pieces = null;
-            if (e.locked || e instanceof MemoElem || (eraserHlOnly && !(e instanceof StrokeElem && ((StrokeElem) e).isHighlighter()))) {
+            if (!RectF.intersects(probe, e.bounds())) {
+                hit = false; // 지우개와 멀리 떨어진 것은 바로 건너뛴다
+            } else if (e.locked || e instanceof MemoElem || (eraserHlOnly && !(e instanceof StrokeElem && ((StrokeElem) e).isHighlighter()))) {
                 hit = false;
             } else if (e instanceof StrokeElem) {
                 if (eraserPartial) {
@@ -2047,6 +2311,7 @@ public class CanvasView extends View {
                 hit = !eraserPartial && e.hit(x, y, 0);
             }
             if (hit) {
+                hitB = union(hitB, e.bounds());
                 if (out == null) {
                     out = new ArrayList<>(l.elems.size());
                     for (int j = 0; j < i; j++) out.add(l.elems.get(j));
@@ -2062,8 +2327,7 @@ public class CanvasView extends View {
         if (out != null) {
             l.elems = out;
             eraseChanged = true;
-            sceneDirty = true;
-            dropPageCache(page());
+            markDirty(hitB, true); // 지워진 획 주변만 다시 그린다
         }
     }
 
@@ -2093,22 +2357,43 @@ public class CanvasView extends View {
             ys = new float[]{t, t, bt, bt};
         } else {
             if (lassoPts.size() < 3) return;
-            int m = lassoPts.size();
+            // 너무 촘촘한 점은 솎아 낸다 (계산량 감소)
+            ArrayList<float[]> pts = new ArrayList<>();
+            float gap = 3f / scale;
+            for (float[] q : lassoPts) {
+                if (pts.isEmpty() || Math.hypot(q[0] - pts.get(pts.size() - 1)[0], q[1] - pts.get(pts.size() - 1)[1]) >= gap) pts.add(q);
+            }
+            if (pts.size() < 3) return;
+            int m = pts.size();
             xs = new float[m];
             ys = new float[m];
             for (int i = 0; i < m; i++) {
-                xs[i] = lassoPts.get(i)[0];
-                ys[i] = lassoPts.get(i)[1];
+                xs[i] = pts.get(i)[0];
+                ys[i] = pts.get(i)[1];
             }
+        }
+        // 올가미가 지나간 범위
+        RectF lb = new RectF(Float.MAX_VALUE, Float.MAX_VALUE, -Float.MAX_VALUE, -Float.MAX_VALUE);
+        for (int i = 0; i < xs.length; i++) {
+            lb.left = Math.min(lb.left, xs[i]);
+            lb.right = Math.max(lb.right, xs[i]);
+            lb.top = Math.min(lb.top, ys[i]);
+            lb.bottom = Math.max(lb.bottom, ys[i]);
         }
         ArrayList<Element> sel = new ArrayList<>();
         for (Element e : activeLayer().elems) {
             if (!passFilter(e)) continue;
+            if (!RectF.intersects(lb, e.bounds())) continue; // 범위 밖은 계산하지 않음
             if (e instanceof StrokeElem) {
                 StrokeElem s = (StrokeElem) e;
-                int inside = 0;
-                for (int i = 0; i < s.n; i++) if (pip(s.pts[3 * i], s.pts[3 * i + 1], xs, ys)) inside++;
-                if (s.n > 0 && inside >= Math.max(1, s.n * 0.6f)) sel.add(e);
+                // 점이 많은 획은 일정 간격으로만 검사 (절반 이상 들어오면 선택)
+                int st = Math.max(1, s.n / 40);
+                int inside = 0, tot = 0;
+                for (int i = 0; i < s.n; i += st) {
+                    tot++;
+                    if (pip(s.pts[3 * i], s.pts[3 * i + 1], xs, ys)) inside++;
+                }
+                if (tot > 0 && inside >= Math.max(1, tot * 0.5f)) sel.add(e);
             } else {
                 if (pip(e.centerX(), e.centerY(), xs, ys)) sel.add(e);
             }
@@ -2215,6 +2500,12 @@ public class CanvasView extends View {
         cy /= cnt;
         float dx = cx - gLastCx, dy = cy - gLastCy;
         if (Math.hypot(cx - downSx, cy - downSy) > 12 * density) movedFar = true;
+        if (cnt < 2 && !movedFar && !pinchedThisGesture) {
+            // 손가락을 대고 살짝 떨리는 정도로는 화면을 움직이지 않는다 (그때마다 화면 전체를 다시 그리게 되어 느려짐)
+            gLastCx = cx;
+            gLastCy = cy;
+            return;
+        }
         if (cnt < 2 && !isInfinite()) {
             // 세로 스크롤 중에는 좌우로 흔들리지 않게 방향 고정
             if (axisLock == 0 && movedFar) {
@@ -2275,7 +2566,12 @@ public class CanvasView extends View {
                 postInvalidateOnAnimation();
             }
         }
-        if (!flung) clampTransform();
+        if (!flung) {
+            clampTransform();
+            // 정수 픽셀 위치에 맞춰 두면 다음에 화면을 밀어서 다시 쓸 수 있다
+            tx = Math.round(tx);
+            ty = Math.round(ty);
+        }
         sceneDirty = true;
         updatePageFromViewport();
         invalidate();

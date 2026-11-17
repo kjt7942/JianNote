@@ -57,7 +57,8 @@ public class Renderer {
         if (!p.isInfinite()) c.restore();
     }
 
-    private static int passOf(Element e) {
+    /** 그리는 순서: 0 = 이미지·메모지, 1 = 형광펜, 2 = 나머지 */
+    public static int passOf(Element e) {
         if (e instanceof com.kjt.jiannote.model.ImageElem || e instanceof com.kjt.jiannote.model.MemoElem) return 0;
         if (e instanceof com.kjt.jiannote.model.StrokeElem && ((com.kjt.jiannote.model.StrokeElem) e).isHighlighter()) return 1;
         return 2;

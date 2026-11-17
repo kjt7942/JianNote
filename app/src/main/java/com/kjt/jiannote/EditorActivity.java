@@ -55,6 +55,8 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
     private CanvasView canvas;
     private PagePanel pagePanel;
     private boolean dirty;
+    /** 자동 저장 뒤 표지 미리보기를 아직 새로 만들지 않았음 */
+    private boolean thumbStale = true;
 
     private final TextView[] toolBtns = new TextView[9];
     private TextView attachBtn, detachBtn, memoPatBtn, homeBtn;
@@ -81,7 +83,14 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
     private final Runnable autosaveTick = new Runnable() {
         @Override
         public void run() {
-            if (dirty) save();
+            if (dirty) {
+                // 쓰는 도중에 저장하면 펜이 끊기므로 손을 뗄 때까지 잠깐 미룬다
+                if (canvas != null && canvas.isBusy()) {
+                    autosave.postDelayed(this, 1500);
+                    return;
+                }
+                save(false);
+            }
             autosave.postDelayed(this, 30000);
         }
     };
@@ -1873,15 +1882,26 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
     // =============== 저장 ===============
 
     private void save() {
+        save(true);
+    }
+
+    /** withThumb = false: 자동 저장. 표지 미리보기는 첫 페이지를 통째로 다시 그려야 해서 느리므로 나갈 때만 만든다 */
+    private void save(boolean withThumb) {
         if (doc == null) return;
         try {
             store.saveDoc(meta.id, doc);
             meta.pageCount = doc.pages.size();
-            if (dirty) meta.modified = System.currentTimeMillis();
+            if (dirty) {
+                meta.modified = System.currentTimeMillis();
+                thumbStale = true;
+            }
             store.saveMeta(meta);
-            Bitmap th = Renderer.thumbnail(doc.pages.get(0), meta.paperColor, rc, 360, 500);
-            store.saveThumb(meta.id, th);
-            th.recycle();
+            if (withThumb && thumbStale) {
+                Bitmap th = Renderer.thumbnail(doc.pages.get(0), meta.paperColor, rc, 360, 500);
+                store.saveThumb(meta.id, th);
+                th.recycle();
+                thumbStale = false;
+            }
             dirty = false;
         } catch (Exception e) {
             Toast.makeText(this, "저장 실패: " + e.getMessage(), Toast.LENGTH_LONG).show();
@@ -1895,7 +1915,7 @@ public class EditorActivity extends Activity implements CanvasView.Listener, Pag
         if (popup != null) popup.dismiss();
         if (layerPopup != null) layerPopup.dismiss();
         if (canvas != null) saveToolPrefs();
-        if (dirty) save();
+        if (dirty || thumbStale) save();
     }
 
     // =============== PagePanel.Host ===============
