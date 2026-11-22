@@ -93,7 +93,9 @@ public class CanvasView extends View {
     // 페이지 배치 (세로 스크롤)
     private float[] pageTop = new float[0];
     private float[] pageLeft = new float[0];
-    private float maxPageW = 1, totalH = 1;
+    private float maxPageW = 1, totalH = 1, contentW = 1;
+    private float[] pageBottom = new float[0];
+    private boolean dual;
     /** 지금 무한 캔버스 페이지를 보고 있는지 (일반 페이지는 세로 스크롤로 이어서 보여줌) */
     private boolean viewInfinite;
     /** 일반 페이지 사이에 보이는 무한 캔버스 카드 높이 */
@@ -331,7 +333,7 @@ public class CanvasView extends View {
     /** 100% 기준 배율 (화면 너비 맞춤) */
     public float baseScale() {
         if (isInfinite() || getWidth() == 0) return 1f;
-        return (getWidth() - 32 * density) / maxPageW;
+        return (getWidth() - 32 * density) / contentW;
     }
 
     public void setPaperColor(int c) {
@@ -346,13 +348,28 @@ public class CanvasView extends View {
         pageTop = new float[n];
         pageLeft = new float[n];
         maxPageW = 0;
-        for (Page p : doc.pages) if (!p.isInfinite()) maxPageW = Math.max(maxPageW, p.w);
+        boolean allPortrait = true;
+        for (Page p : doc.pages) {
+            if (p.isInfinite()) { allPortrait = false; continue; }
+            maxPageW = Math.max(maxPageW, p.w);
+            if (p.h <= p.w) allPortrait = false;
+        }
         if (maxPageW <= 0) maxPageW = 1240;
+        // 가로 화면 + 세로형 문서: 한 화면에 2페이지씩 (1·2, 3·4 ...)
+        dual = allPortrait && n > 1 && getWidth() > getHeight();
+        contentW = dual ? maxPageW * 2 + GAP : maxPageW;
+        pageBottom = new float[n];
         float y = 0;
-        for (int i = 0; i < n; i++) {
-            pageTop[i] = y;
-            pageLeft[i] = (maxPageW - layoutW(i)) / 2f;
-            y += layoutH(i) + GAP;
+        int step = dual ? 2 : 1;
+        for (int r = 0; r < n; r += step) {
+            float rowH = 0;
+            for (int i = r; i < Math.min(n, r + step); i++) rowH = Math.max(rowH, layoutH(i));
+            for (int i = r; i < Math.min(n, r + step); i++) {
+                pageTop[i] = y;
+                pageBottom[i] = y + rowH;
+                pageLeft[i] = (dual ? (i - r) * (maxPageW + GAP) : 0) + (maxPageW - layoutW(i)) / 2f;
+            }
+            y += rowH + GAP;
         }
         totalH = Math.max(1, y - GAP);
     }
@@ -372,12 +389,16 @@ public class CanvasView extends View {
         return -1;
     }
 
-    private int pageAtWorldY(float gy) {
+    private int pageAtWorld(float gx, float gy) {
         if (isInfinite()) return 0;
-        for (int i = 0; i < doc.pages.size(); i++) {
-            if (gy < pageTop[i] + layoutH(i) + GAP / 2f) return i;
+        int n = doc.pages.size();
+        for (int i = 0; i < n; i++) {
+            if (gy < pageBottom[i] + GAP / 2f) {
+                if (dual && i % 2 == 0 && i + 1 < n && gx > maxPageW + GAP / 2f) return i + 1;
+                return i;
+            }
         }
-        return doc.pages.size() - 1;
+        return n - 1;
     }
 
     private void setCurrentPage(int i) {
@@ -391,13 +412,13 @@ public class CanvasView extends View {
 
     private void switchToPageAt(float sx, float sy) {
         if (isInfinite()) return;
-        setCurrentPage(pageAtWorldY((sy - ty) / scale));
+        setCurrentPage(pageAtWorld((sx - tx) / scale, (sy - ty) / scale));
     }
 
     /** 화면 중앙에 있는 페이지를 현재 페이지로 */
     private void updatePageFromViewport() {
         if (isInfinite() || inputKind != IN_NONE || !selection.isEmpty() || getHeight() == 0) return;
-        int i = pageAtWorldY((getHeight() / 3f - ty) / scale);
+        int i = pageAtWorld((getWidth() / 2f - tx) / scale, (getHeight() / 3f - ty) / scale);
         if (doc.pages.get(i).isInfinite()) return;
         setCurrentPage(i);
     }
@@ -426,7 +447,7 @@ public class CanvasView extends View {
             if (viewInfinite) {
                 viewInfinite = false;
                 scale = baseScale();
-                tx = (getWidth() - maxPageW * scale) / 2f;
+                tx = (getWidth() - contentW * scale) / 2f;
             }
             ty = 16 * density - pageTop[i] * scale;
             clampTransform();
@@ -572,7 +593,7 @@ public class CanvasView extends View {
             ty = 40 * density;
         } else {
             scale = baseScale();
-            tx = (getWidth() - maxPageW * scale) / 2f;
+            tx = (getWidth() - contentW * scale) / 2f;
             ty = 16 * density - oy() * scale;
             clampTransform();
         }
@@ -698,6 +719,18 @@ public class CanvasView extends View {
         undo.clear();
         pageIndex = Math.min(pageIndex, doc.pages.size() - 1);
         goToPage(Math.min(i, doc.pages.size() - 1));
+        changed();
+    }
+
+    /** 여러 페이지 한 번에 삭제 (최소 1페이지는 남김) */
+    public void deletePages(java.util.Collection<Integer> idxs) {
+        java.util.ArrayList<Integer> sorted = new java.util.ArrayList<>(new java.util.TreeSet<>(idxs));
+        if (sorted.isEmpty() || sorted.size() >= doc.pages.size()) return;
+        int first = sorted.get(0);
+        for (int k = sorted.size() - 1; k >= 0; k--) doc.pages.remove((int) sorted.get(k));
+        relayout();
+        undo.clear();
+        goToPage(Math.min(first, doc.pages.size() - 1));
         changed();
     }
 
@@ -1129,6 +1162,7 @@ public class CanvasView extends View {
         sceneAlt = null;
         sceneContentOk = false;
         scene = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+        if (doc != null) relayout(); // 가로/세로 전환 시 1열/2열 다시 배치
         if (doc != null && (ow == 0 || !isInfinite())) fitPage();
         sceneDirty = true;
     }
@@ -2596,7 +2630,7 @@ public class CanvasView extends View {
             }
             if (axisLock == 0 || axisLock == 1) dx = 0;
             else if (axisLock == 2) dy = 0;
-            if (maxPageW * scale <= getWidth()) dx = 0; // 페이지가 화면 폭 안이면 좌우 이동 없음
+            if (contentW * scale <= getWidth()) dx = 0; // 페이지가 화면 폭 안이면 좌우 이동 없음
         }
         tx += dx;
         ty += dy;
@@ -2638,7 +2672,7 @@ public class CanvasView extends View {
             velocity.computeCurrentVelocity(1000, maxFling);
             float vx = velocity.getXVelocity(), vy = velocity.getYVelocity();
             if (!isInfinite()) {
-                if (axisLock == 1 || axisLock == 0 || maxPageW * scale <= getWidth()) vx = 0;
+                if (axisLock == 1 || axisLock == 0 || contentW * scale <= getWidth()) vx = 0;
                 else if (axisLock == 2) vy = 0;
             }
             if (Math.hypot(vx, vy) > minFling * 2) {
@@ -2663,7 +2697,7 @@ public class CanvasView extends View {
     private int[] bounds() {
         if (isInfinite()) return new int[]{-100000000, 100000000, -100000000, 100000000};
         float m = 24 * density;
-        float pw = maxPageW * scale, ph = totalH * scale;
+        float pw = contentW * scale, ph = totalH * scale;
         int minX, maxX, minY, maxY;
         if (pw <= getWidth()) {
             minX = maxX = Math.round((getWidth() - pw) / 2f);

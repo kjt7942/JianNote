@@ -41,6 +41,26 @@ public class PagePanel extends FrameLayout {
     private final ScrollView scroll;
     private final TextView tabAll, tabMarked;
     private boolean bookmarksOnly;
+    private boolean selecting;
+    private final java.util.TreeSet<Integer> selected = new java.util.TreeSet<>();
+    private TextView selectBtn;
+
+    private void deleteSelected() {
+        if (selected.size() >= canvas.pageCount()) {
+            Toast.makeText(act, "모든 페이지를 삭제할 수는 없습니다", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        new AlertDialog.Builder(act).setTitle("페이지 삭제")
+                .setMessage("선택한 " + selected.size() + "개 페이지를 삭제할까요?")
+                .setNegativeButton("취소", null)
+                .setPositiveButton("삭제", (d, w) -> {
+                    canvas.deletePages(selected);
+                    selected.clear();
+                    selecting = false;
+                    host.onPagesEdited();
+                    rebuild();
+                }).show();
+    }
     private final IdentityHashMap<Page, Bitmap> thumbs = new IdentityHashMap<>();
     private final HashMap<Integer, FrameLayout> cards = new HashMap<>();
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -76,6 +96,21 @@ public class PagePanel extends FrameLayout {
         TextView title = Ui.label(a, "페이지", 22, Ui.TEXT, true);
         title.setPadding(Ui.dp(a, 6), 0, 0, 0);
         head.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        selectBtn = Ui.label(a, "선택", 15, Ui.ACCENT, true);
+        selectBtn.setPadding(Ui.dp(a, 12), Ui.dp(a, 8), Ui.dp(a, 12), Ui.dp(a, 8));
+        selectBtn.setOnClickListener(v -> {
+            if (!selecting) {
+                selecting = true;
+                selected.clear();
+            } else if (selected.isEmpty()) {
+                selecting = false;
+            } else {
+                deleteSelected();
+                return;
+            }
+            rebuild();
+        });
+        head.addView(selectBtn);
         TextView add = Ui.iconButton(a, R.drawable.ic_add, null);
         add.setTooltipText("페이지 추가");
         add.setOnClickListener(v -> {
@@ -135,6 +170,8 @@ public class PagePanel extends FrameLayout {
     }
 
     public void hide() {
+        selecting = false;
+        selected.clear();
         panel.animate().translationX(panelW).setDuration(180).withEndAction(() -> setVisibility(GONE)).start();
     }
 
@@ -196,6 +233,8 @@ public class PagePanel extends FrameLayout {
         tabAll.setTextColor(Ui.TEXT);
         tabMarked.setTextColor(Ui.TEXT);
 
+        selectBtn.setText(!selecting ? "선택" : selected.isEmpty() ? "취소" : "삭제 (" + selected.size() + ")");
+        selectBtn.setTextColor(selecting && !selected.isEmpty() ? 0xFFE53935 : Ui.ACCENT);
         list.removeAllViews();
         cards.clear();
         renderQueue.clear();
@@ -265,14 +304,35 @@ public class PagePanel extends FrameLayout {
         });
 
         styleCard(card, i == canvas.pageIndex());
-        card.setOnClickListener(v -> {
-            canvas.goToPage(i);
-            onPageChanged();
-        });
-        card.setOnLongClickListener(v -> {
-            pageMenu(v, i);
-            return true;
-        });
+        if (selecting) {
+            ribbon.setVisibility(GONE);
+            ImageView chk = new ImageView(act);
+            chk.setPadding(Ui.dp(act, 6), Ui.dp(act, 6), Ui.dp(act, 6), Ui.dp(act, 6));
+            chk.setImageResource(R.drawable.ic_close);
+            card.addView(chk, new LayoutParams(Ui.dp(act, 40), Ui.dp(act, 40), Gravity.TOP | Gravity.END));
+            Runnable paint = () -> {
+                boolean on = selected.contains(i);
+                chk.setBackground(Ui.round(on ? 0xFFE53935 : 0x88FFFFFF, Ui.dp(act, 20)));
+                chk.setImageTintList(android.content.res.ColorStateList.valueOf(on ? Color.WHITE : 0x00000000));
+                card.setAlpha(on ? 0.6f : 1f);
+            };
+            paint.run();
+            card.setOnClickListener(v -> {
+                if (!selected.remove(i)) selected.add(i);
+                paint.run();
+                selectBtn.setText(selected.isEmpty() ? "취소" : "삭제 (" + selected.size() + ")");
+                selectBtn.setTextColor(selected.isEmpty() ? Ui.ACCENT : 0xFFE53935);
+            });
+        } else {
+            card.setOnClickListener(v -> {
+                canvas.goToPage(i);
+                onPageChanged();
+            });
+            card.setOnLongClickListener(v -> {
+                pageMenu(v, i);
+                return true;
+            });
+        }
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         lp.gravity = Gravity.CENTER_HORIZONTAL;
         lp.setMargins(0, Ui.dp(act, 10), 0, Ui.dp(act, 10));
